@@ -1,0 +1,5 @@
+storage.db
+storage.key
+*.log
+__pycache__/*.pyc
+libs/*
