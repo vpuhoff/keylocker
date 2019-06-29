@@ -3,3 +3,7 @@ storage.key
 *.log
 __pycache__/*.pyc
 libs/*
+
+# Ignore dynaconf secret files
+.secrets.*
+vaultdb/__pycache__/*.pyc

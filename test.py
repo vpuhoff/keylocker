@@ -1,10 +1,4 @@
-import fire
+from vaultdb.__main__ import Storage
+settings = Storage()
 
-class Calculator(object):
-  """A simple calculator class."""
-
-  def double(self, number):
-    return 2 * number
-
-if __name__ == '__main__':
-  fire.Fire(Calculator)
+print(settings['asdasd'])

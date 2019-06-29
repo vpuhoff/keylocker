@@ -19,12 +19,17 @@ class MenuBuilderFrame(Frame):
         layout = Layout([1, 18, 1])
         self.add_layout(layout)
         layout.add_widget(Label(data['label']), 1)
+        self.targetaction = data['action']
         layout.add_widget(Divider(height=1), 1)
         for key in data['items']:
-            layout.add_widget(Button(key, self.data['items'][key]), 1)
+            layout.add_widget(Button(key,self.action ), 1)
         layout.add_widget(Divider(height=1), 1)
         layout.add_widget(Button("Выход", self._quit), 1)
         self.fix()
+
+    def action(self):
+        key = self.focussed_widget._text.replace('< ','').replace(' >','')
+        self.targetaction(key,self.scene,self._screen)
 
     def _set_default(self):
         self.set_theme("default")

@@ -1,9 +1,9 @@
 import pickledb
 import fire
 from cryptography.fernet import Fernet
- 
+
 class Storage(object):
-    def __init__(self, filename='storage.db', key_file='storage.key'):
+    def __init__(self, filename='secrets.json', key_file='storage.key'):
         self.db = pickledb.load(filename,True)
         with open(key_file,'rb') as keyfile:
             key = keyfile.read()
@@ -13,31 +13,32 @@ class Storage(object):
         self.db[key] = self.fernet.encrypt(value.encode()).decode()
  
     def __getitem__(self, key):
-        return self.fernet.decrypt(self.db[key]) 
+        return self.fernet.decrypt(self.db[key].encode()).decode()
 
     def keys(self):
         return self.db.getall()
  
-def GenerateKey():
-    import base64
-    import os
-    from cryptography.fernet import Fernet
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    key = Fernet.generate_key()
-    longpass = key
-    salt = os.urandom(16)
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100000,
-        backend=default_backend()
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(longpass))
-    with open('storage.key','wb') as f:
-        f.write(key)
+def GenerateKey(selected):
+    if selected==1:
+        import base64
+        import os
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        key = Fernet.generate_key()
+        longpass = key
+        salt = os.urandom(16)
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(longpass))
+        with open('storage.key','wb') as f:
+            f.write(key)
 
 # class Manager(object):
 #     def generate_key(self):
@@ -83,9 +84,9 @@ if __name__ == '__main__':
     logging.basicConfig(filename="forms.log", level=logging.INFO)
     logging.info(db.keys())
 
-    from add_item import AddItemFrame
-    from menu_builder import MenuBuilderFrame
-    from item_menu import ItemFrame
+    from vaultdb.add_item import AddItemFrame
+    from vaultdb.menu_builder import MenuBuilderFrame
+    from vaultdb.item_menu import ItemFrame
 
     def AddItem(screen, scene):
         screen.play([Scene([
@@ -104,32 +105,45 @@ if __name__ == '__main__':
             })
         ], -1)], stop_on_resize=True, start_scene=scene, allow_int=True)
 
+    def ListAction(menukey,scene,screen):
+        
+        print(menukey)
+
     def ListItems(screen, scene):
-        items = {}
-        for key in db.keys():
-            items[key]=lambda key: Screen.wrapper(Item, catch_interrupt=False, arguments=[last_scene,key])
         screen.play([Scene([
             Background(screen),
             MenuBuilderFrame(screen,data={
                 "label":"*** Объекты в хранилище  ***",
-                "items":items
+                "items":list(db.keys()),
+                "action":ListAction
             })
         ], -1)], stop_on_resize=True, start_scene=scene, allow_int=True)
 
     def ShowListItem():
         Screen.wrapper(ListItems, catch_interrupt=False, arguments=[last_scene])
 
+    def NeedRegenerate(screen,scene):
+        screen.add_effect(
+            PopUpDialog(scene,"Текущий ключ будет перезаписан, вы уверены?",
+                        ["Да", "Нет"],
+                        has_shadow=True, on_close=GenerateKey))
+
+    def mainmenuselector(action,scene,screen):
+        if action=="Список объектов":
+            ShowListItem()
+        if action=="Добавить объект":
+            ShowAddItem()
+        if action=="Сгенерировать ключ":
+            NeedRegenerate(scene,screen)
 
     def MainMenu(screen, scene):
         screen.play([Scene([
             Background(screen),
             MenuBuilderFrame(screen,data={
                 "label":"*** Добро пожаловать в редактор хранилища. Выберите операцию.  ***",
-                "items":{
-                    "Список объектов":ShowListItem,
-                    "Добавить объект":ShowAddItem,
-                    "Сгенерировать ключ":GenerateKey
-                }
+                "items":["Список объектов","Добавить объект","Сгенерировать ключ"],
+                "action":mainmenuselector,
+                "scene":scene
             })
         ], -1)], stop_on_resize=True, start_scene=scene, allow_int=True)
 
