@@ -4,7 +4,8 @@ from . import Storage
 import fire 
 class Manager(object):
     def __init__(self):
-        self.db = Storage()
+        self.storage = Storage()
+        self.__name__='vaultdb'
         return super().__init__()
 
     def generate_key(self):
@@ -31,16 +32,29 @@ class Manager(object):
         # key = Fernet.generate_key()
         # return (key.decode())
     def write(self,key, value):
-        self.db[key]=value
+        self.storage[key]=value
         return 'OK'
-    
+        
+
+    def remove(self,key):
+        if key =='*':
+            for key,value in self.storage.db.dgetall():
+                self.storage.db.drem(key)
+        else:
+            try:
+                self.storage.db.drem(key)
+                return 'OK'
+            except KeyError as e:
+                print('ERROR: Key not found')
+                exit(888)
+        
     def read(self,key):
-        return self.db[key]
+        return self.storage[key]
 
     def list(self):
-        for item in list(self.db.keys()):
+        for item in list(self.storage.keys()):
             print(item)
 
 
 if __name__ == '__main__':
-    fire.Fire(Manager)    
+    fire.Fire(Manager, name='vaultdb')    
