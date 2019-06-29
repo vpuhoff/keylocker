@@ -7,3 +7,4 @@ libs/*
 # Ignore dynaconf secret files
 .secrets.*
 vaultdb/__pycache__/*.pyc
+secrets.json
