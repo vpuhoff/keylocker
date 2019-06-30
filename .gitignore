@@ -10,3 +10,6 @@ vaultdb/__pycache__/*.pyc
 secrets.json
 *.pyc
 dist/*
+keylocker.egg-info/*
+setup.py
+poetry.lock
