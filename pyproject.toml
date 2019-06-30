@@ -1,7 +1,9 @@
 [tool.poetry]
 name = "keylocker"
-version = "0.1.1"
+version = "0.1.4"
 description = "Library with the CLI to save the encrypted secrets in the configuration file, but a transparent read and write the new settings in the app."
+readme = "README.md"
+license = "MIT"
 authors = ["vpuhoff <vpuhoff@live.ru>"]
 
 [tool.poetry.dependencies]
