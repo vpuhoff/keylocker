@@ -7,7 +7,6 @@ license = "MIT"
 authors = ["vpuhoff <vpuhoff@live.ru>"]
 
 [tool.poetry.dependencies]
-python = "~2.7 || ^3.2"
 pickleDB = "^0.9.2"
 cryptography = "^2.4"
 fire = "^0.1.3"
