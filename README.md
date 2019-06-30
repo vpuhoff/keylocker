@@ -16,3 +16,11 @@ from keylocker import Storage
 secrets = Storage()
 print(secrets['test'])
 ```
+
+## Simple usage in bash:
+```
+PYPIPASS="$(keylocker read pypi_password)"
+PYPIUSER="$(keylocker read pypi_user)"
+poetry publish --username "${PYPIUSER}" --password "${PYPIPASS}" --build
+```
+
