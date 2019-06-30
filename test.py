@@ -1,4 +1,4 @@
-from vaultdb.__main__ import Storage
+from keylocker import Storage
 settings = Storage()
 
-print(settings['asdasd'])
+print(settings['настя'])

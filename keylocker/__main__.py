@@ -1,11 +1,9 @@
 from . import Storage
 
-
 import fire 
 class Manager(object):
     def __init__(self):
         self.storage = Storage()
-        self.__name__='vaultdb'
         return super().__init__()
 
     def generate_key(self):
@@ -57,4 +55,4 @@ class Manager(object):
 
 
 if __name__ == '__main__':
-    fire.Fire(Manager, name='vaultdb')    
+    fire.Fire(Manager, name='keylocker')    
