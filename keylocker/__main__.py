@@ -6,7 +6,7 @@ class Manager(object):
         self.storage = Storage()
         return super().__init__()
 
-    def generate_key(self):
+    def init(self):
         import base64
         import os
         from cryptography.fernet import Fernet

@@ -3,7 +3,7 @@ Library with the CLI to save the encrypted secrets in the configuration file, bu
 
 ## Simple usage in CLI:
 ```
-keylocker generate-key
+keylocker init
 keylocker list
 keylocker read <keyname>
 keylocker remove <keyname>
