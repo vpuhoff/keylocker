@@ -54,5 +54,5 @@ class Manager(object):
             print(item)
 
 
-if __name__ == '__main__':
+def main():
     fire.Fire(Manager, name='keylocker')    
