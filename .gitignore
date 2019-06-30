@@ -10,3 +10,4 @@ vaultdb/__pycache__/*.pyc
 secrets.json
 *.pyc
 dist/*
+publish.sh
