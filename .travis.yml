@@ -10,10 +10,15 @@ script:
   - poetry build
 deploy:
   - provider: script
+    skip_cleanup: true
     script: poetry publish --username $PYPI_USER --password $PYPI_PASS
     on:
       branch: master
       python: 3.6
 notifications:
   email:
-    - vpuhoff92@gmail.com
+    - vpuhoff92@gmail.com #dg6me6vb8u@pomail.net
+  pushover:
+    api_key: "[abr8gsmvvj3dns59go68h4dvm9mdg3]"
+    users:
+      - "[uiiack1q9atfsdvc8co627g3z1hmjf]"
