@@ -24,3 +24,8 @@ PYPIUSER="$(keylocker read pypi_user)"
 poetry publish --username "${PYPIUSER}" --password "${PYPIPASS}" --build
 ```
 
+## Source Code:
+*[https://github.com/vpuhoff/keylocker](https://github.com/vpuhoff/keylocker)
+
+## Travis CI Deploys:
+*[https://travis-ci.com/vpuhoff/keylocker](https://travis-ci.com/vpuhoff/keylocker) [![Build Status](https://travis-ci.com/vpuhoff/keylocker.svg?branch=master)](https://travis-ci.com/vpuhoff/keylocker)
