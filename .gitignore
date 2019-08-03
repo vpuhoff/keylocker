@@ -13,3 +13,5 @@ dist/*
 keylocker.egg-info/*
 setup.py
 poetry.lock
+Pipfile.lock
+.vscode/settings.json

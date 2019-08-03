@@ -42,7 +42,7 @@ import fire
 class Manager(object):
     def __init__(self):
         self.storage = Storage()
-        return super().__init__()
+        #return super().__init__()
 
     def init(self):
         import base64
@@ -94,3 +94,6 @@ class Manager(object):
 
 def main():
     fire.Fire(Manager, name='keylocker')    
+
+if __name__ == "__main__":
+    main()
