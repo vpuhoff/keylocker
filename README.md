@@ -1,6 +1,3 @@
-Okay, here is the consolidated and updated `README.md` in English, reflecting the YAML support, `!SEC`/`!ENV` tags, environment variable key (`KEYLOCKER_SECRET_KEY`), and installation instructions:
-
-```markdown
 # Keylocker CLI (YAML Edition)
 
 A command-line interface (CLI) tool and Python library for managing secrets directly within YAML configuration files. Allows encrypting individual values using the `!SEC` tag and loading values from environment variables using the `!ENV` tag.
