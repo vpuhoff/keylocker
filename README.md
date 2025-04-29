@@ -5,6 +5,7 @@ A command-line interface (CLI) tool and Python library for managing secrets dire
 
 * Wiki: [https://deepwiki.com/vpuhoff/keylocker](https://deepwiki.com/vpuhoff/keylocker/1-overview)
 
+![Alt](https://repobeats.axiom.co/api/embed/61e3a712de309936dc034c3851dc1a6144d3b4dd.svg "Repobeats analytics image")
 
 ## Encryption Key
 
