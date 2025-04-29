@@ -1,92 +1,90 @@
 # Keylocker CLI (YAML Edition)
 
-Инструмент командной строки (CLI) и библиотека Python для управления секретами непосредственно в YAML файлах конфигурации. Позволяет шифровать отдельные значения с помощью тега `!SEC` и загружать значения из переменных окружения с помощью тега `!ENV`.
+A command-line interface (CLI) tool and Python library for managing secrets directly within YAML configuration files. Allows encrypting individual values using the `!SEC` tag and loading values from environment variables using the `!ENV` tag.
 
-## Установка (Installation)
+## Installation
 
-Установить пакет можно с помощью pip:
+You can install the package using pip:
 
 ```bash
 pip install keylocker
 ```
 
-## Пример YAML файла (`config.yaml`):
+The package is available on PyPI: [https://pypi.org/project/keylocker/](https://pypi.org/project/keylocker/)
+
+## Example YAML file (`config.yaml`):
 
 ```yaml
 # config.yaml
 database:
   host: db.example.com
   username: user
-  # Зашифрованный пароль с помощью keylocker encrypt
+  # Encrypted password using 'keylocker encrypt'
   password: !SEC gAAAAABh...[rest of encrypted data]...
 api:
   endpoint: [https://api.example.com](https://api.example.com)
-  # Загрузка ключа из переменной окружения API_KEY
+  # Load key from the API_KEY environment variable
   key: !ENV API_KEY
 deployment:
   region: us-east-1
-  # Еще один секрет
+  # Another secret
   ssh_key_pass: !SEC gAAAAABh...[another encrypted data]...
-````
+```
 
-## Использование в CLI:
+## CLI Usage:
 
-1.  **Инициализация (создание ключа):**
-
+1.  **Initialization (create key):**
     ```bash
     keylocker init
-    # Будет создан файл storage.key (если не существует)
+    # The storage.key file will be created (if it doesn't exist)
     ```
 
-2.  **Шифрование значения для вставки в YAML:**
-
+2.  **Encrypt value for YAML insertion:**
     ```bash
     keylocker encrypt "my_secret_value"
-    # Вывод:
+    # Output:
     # Add the following line to your YAML file:
     # !SEC gAAAAABh...[encrypted data]...
 
-    # Скопируйте строку !SEC ... в ваш YAML файл
+    # Copy the !SEC ... line into your YAML file
     ```
 
-3.  **Просмотр расшифрованного YAML:**
-
+3.  **View decrypted YAML:**
     ```bash
-    # Установите переменную окружения (если используется !ENV)
+    # Set the environment variable (if using !ENV)
     export API_KEY="your_actual_api_key"
 
     keylocker view config.yaml
-    # Выведет YAML с расшифрованными значениями !SEC
-    # и подставленными значениями !ENV
-    # Пример вывода:
+    # Outputs the YAML with !SEC values decrypted
+    # and !ENV values substituted
+    # Example output:
     # database:
     #   host: db.example.com
     #   username: user
-    #   password: my_secret_value # Расшифровано!
+    #   password: my_secret_value # Decrypted!
     # api:
     #   endpoint: [https://api.example.com](https://api.example.com)
-    #   key: your_actual_api_key  # Подставлено из env!
+    #   key: your_actual_api_key  # Substituted from env!
     # deployment:
     #   region: us-east-1
-    #   ssh_key_pass: decrypted_pass # Расшифровано!
+    #   ssh_key_pass: decrypted_pass # Decrypted!
     ```
+    *(Note: An `edit` command might be added in the future for interactive editing)*
 
-    *(Примечание: Команда `edit` может быть добавлена в будущем для интерактивного редактирования)*
-
-## Использование в коде Python:
+## Usage in Python Code:
 
 ```python
 import os
 from keylocker import load_yaml_secrets
 
-# Установите переменные окружения, если нужно
+# Set environment variables if needed
 os.environ['API_KEY'] = 'your_actual_api_key_for_python'
 
 config_file = 'config.yaml'
-key_file = 'storage.key' # Убедитесь, что ключ существует
+key_file = 'storage.key' # Make sure the key exists
 
 try:
-    # Загрузка и автоматическая расшифровка/подстановка
+    # Load and automatically decrypt/substitute
     secrets = load_yaml_secrets(config_file, key_file)
 
     if secrets:
@@ -98,44 +96,43 @@ try:
 
 except Exception as e:
     print(f"An error occurred: {e}")
-
 ```
 
-## Использование в Bash:
+## Usage in Bash:
 
-Для извлечения конкретных значений из расшифрованного YAML можно использовать утилиты вроде `yq` или стандартные инструменты Unix.
+To extract specific values from the decrypted YAML, you can use utilities like `yq` or standard Unix tools.
 
 ```bash
 #!/bin/bash
 
-# Убедитесь, что переменная окружения установлена, если она нужна
+# Make sure the environment variable is set if needed
 export API_KEY="your_bash_api_key"
 
-# Получаем расшифрованный YAML
+# Get the decrypted YAML
 CONFIG_YAML=$(keylocker view config.yaml)
 
-# Проверка, что команда выполнилась успешно
+# Check if the command executed successfully
 if [ $? -ne 0 ]; then
-  echo "Ошибка при выполнении keylocker view"
+  echo "Error executing keylocker view"
   exit 1
 fi
 
-# Пример извлечения с помощью yq (требует установки yq)
+# Example extraction using yq (requires yq installation)
 # DB_PASS=$(echo "$CONFIG_YAML" | yq e '.database.password' -)
 # API_KEY_FROM_YAML=$(echo "$CONFIG_YAML" | yq e '.api.key' -)
 
-# Пример извлечения с помощью grep/sed (менее надежно)
+# Example extraction using grep/awk (less robust)
 DB_PASS=$(echo "$CONFIG_YAML" | grep -A 1 'database:' | grep 'password:' | awk '{print $2}')
 API_KEY_FROM_YAML=$(echo "$CONFIG_YAML" | grep -A 1 'api:' | grep 'key:' | awk '{print $2}')
 
 
-echo "Извлеченный пароль БД: $DB_PASS"
-echo "Извлеченный API ключ: $API_KEY_FROM_YAML"
+echo "Extracted DB Password: $DB_PASS"
+echo "Extracted API Key: $API_KEY_FROM_YAML"
 
-# Дальнейшее использование переменных...
-# poetry publish --username user --password "${DB_PASS}" --build
+# Further use of variables...
+# e.g., publish command using extracted credentials
+# some_command --username user --password "${DB_PASS}"
 ```
-
 
 ## Source Code:
 * [https://github.com/vpuhoff/keylocker](https://github.com/vpuhoff/keylocker)
