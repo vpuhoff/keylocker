@@ -2,6 +2,14 @@
 
 Инструмент командной строки (CLI) и библиотека Python для управления секретами непосредственно в YAML файлах конфигурации. Позволяет шифровать отдельные значения с помощью тега `!SEC` и загружать значения из переменных окружения с помощью тега `!ENV`.
 
+## Установка (Installation)
+
+Установить пакет можно с помощью pip:
+
+```bash
+pip install keylocker
+```
+
 ## Пример YAML файла (`config.yaml`):
 
 ```yaml
@@ -131,6 +139,3 @@ echo "Извлеченный API ключ: $API_KEY_FROM_YAML"
 
 ## Source Code:
 * [https://github.com/vpuhoff/keylocker](https://github.com/vpuhoff/keylocker)
-
-## Travis CI Deploys:
-* [https://travis-ci.com/vpuhoff/keylocker](https://travis-ci.com/vpuhoff/keylocker) [![Build Status](https://travis-ci.com/vpuhoff/keylocker.svg?branch=master)](https://travis-ci.com/vpuhoff/keylocker)
