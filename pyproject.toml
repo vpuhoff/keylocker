@@ -1,17 +1,13 @@
-# pyproject.toml
-
-# Стандартная секция метаданных (PEP 621), используется инструментом 'build'
 [project]
 name = "keylocker"
-version = "0.4.0" # Убедитесь, что версия актуальна
+version = "0.4.2" # Убедитесь, что версия актуальна
 description = "Инструмент CLI и библиотека для управления секретами в YAML файлах с шифрованием." # Описание обновлено
 readme = "README.md"
-license = { text = "MIT" } # Можно использовать такой формат
+license = { text = "MIT" } 
 authors = [
-    { name = "vpuhoff", email = "vpuhoff@live.ru" } # Стандартный формат
+    { name = "vpuhoff", email = "vpuhoff@live.ru" }
 ]
 requires-python = ">=3.10" # Явно указываем поддержку Python
-# Классификаторы помогают PyPI правильно категоризировать ваш пакет (опционально, но полезно)
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -21,16 +17,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities",
 ]
-# Динамическое определение зависимостей здесь не нужно, т.к. используется Pipfile
-# dependencies = [] # Оставляем пустым или убираем
+dependencies = [] 
 
 # Стандартная секция для определения скриптов/точек входа
 [project.scripts]
-keylocker = "keylocker:main" # Перенесено из [tool.poetry.scripts]
+keylocker = "keylocker:main"
 
-# Секция для указания системы сборки (оставляем Poetry Core для простоты)
 [build-system]
-# Указываем, что для сборки нужен poetry-core
 requires = ["poetry-core>=1.0.0"]
-# Указываем бэкенд Poetry для сборки пакета
 build-backend = "poetry.core.masonry.api"
