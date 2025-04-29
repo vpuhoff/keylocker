@@ -7,6 +7,6 @@ verify_ssl = true
 pytest = "*"
 
 [packages]
-cryptography = "==41.0.3"
+cryptography = "==44.0.1"
 fire = "==0.1.3"
 pyyaml = "*"
