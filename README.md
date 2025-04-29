@@ -2,6 +2,8 @@
 
 A command-line interface (CLI) tool and Python library for managing secrets directly within YAML configuration files. Allows encrypting individual values using the `!SEC` tag and loading values from environment variables using the `!ENV` tag.
 
+* Wiki: [https://deepwiki.com/vpuhoff/keylocker](https://deepwiki.com/vpuhoff/keylocker/1-overview)
+
 ## Encryption Key
 
 Keylocker uses a Fernet key for encryption and decryption. The key is obtained in the following order of priority:
@@ -148,5 +150,6 @@ echo "Extracted API Key (from Bash): $API_KEY_FROM_YAML"
 
 ## Source Code:
 * [https://github.com/vpuhoff/keylocker](https://github.com/vpuhoff/keylocker)
+* [https://deepwiki.com/vpuhoff/keylocker](https://deepwiki.com/vpuhoff/keylocker/1-overview)
 
 ```
