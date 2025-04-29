@@ -1,0 +1,102 @@
+# .github/workflows/python-publish.yml
+
+name: Build, Test, and Publish Python Package (Pipenv)
+
+# Триггеры запуска:
+on:
+  push:
+    branches: [ master, main ]
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  # Задача для сборки и тестирования
+  build_and_test:
+    name: Build & Test (Python 3.10)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Pipenv
+      run: python -m pip install --upgrade pip pipenv
+
+    # Кэширование Pipenv окружения для ускорения
+    - name: Cache Pipenv virtualenv
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/share/virtualenvs # Стандартный путь Pipenv для virtualenv
+        key: ${{ runner.os }}-pipenv-${{ hashFiles('**/Pipfile.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-pipenv-
+
+    - name: Install dependencies using Pipenv
+      run: pipenv install --dev # Устанавливаем основные и dev зависимости
+
+    - name: Run tests (pytest via Pipenv)
+      run: pipenv run pytest tests/ # Запускаем тесты через pipenv run
+
+    # Сборка пакета (sdist и wheel) стандартным способом
+    - name: Install build tools
+      run: pipenv install --dev build # Добавляем 'build' в dev зависимости
+
+    - name: Build package
+      run: pipenv run python -m build # Стандартная команда сборки
+
+    # Загрузка артефактов сборки
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-python-3.10
+        path: dist/
+
+  # Задача для публикации на PyPI (запускается ТОЛЬКО на push тегов)
+  deploy:
+    name: Deploy to PyPI
+    needs: build_and_test # Зависит от успешной сборки/тестов
+    runs-on: ubuntu-latest
+    # Условие запуска: только если событие - это push тега
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/keylocker # Замените 'keylocker' на имя вашего пакета
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Pipenv and Twine
+      run: |
+        python -m pip install --upgrade pip pipenv
+        # Устанавливаем twine для публикации (предполагается, что он есть в dev-зависимостях Pipfile)
+        pipenv install --dev twine
+
+    # Скачивание артефактов сборки из предыдущей задачи
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist-python-3.10 # Имя должно совпадать с upload-artifact
+        path: dist/
+
+    - name: Publish package to PyPI using Twine
+      run: pipenv run twine upload dist/*
+      env:
+        # Используйте секрет репозитория `PYPI_API_TOKEN`
+        # Twine автоматически подхватывает стандартные переменные окружения
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        TWINE_REPOSITORY_URL: https://upload.pypi.org/legacy/ # Явно указываем URL
