@@ -1,6 +1,6 @@
 [project]
 name = "keylocker"
-version = "0.4.3" # Убедитесь, что версия актуальна
+version = "0.4.5" # Убедитесь, что версия актуальна
 description = "Library with the CLI to save the encrypted secrets in the configuration file, but a transparent read and write the new settings in the app."
 readme = "README.md"
 license = { text = "MIT" } 
