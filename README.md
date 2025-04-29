@@ -1,8 +1,10 @@
 # Keylocker CLI (YAML Edition)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/keylocker)](https://pypi.org/project/keylocker/) [![Downloads](https://static.pepy.tech/badge/keylocker)](https://pepy.tech/project/keylocker)
 
 A command-line interface (CLI) tool and Python library for managing secrets directly within YAML configuration files. Allows encrypting individual values using the `!SEC` tag and loading values from environment variables using the `!ENV` tag.
 
 * Wiki: [https://deepwiki.com/vpuhoff/keylocker](https://deepwiki.com/vpuhoff/keylocker/1-overview)
+
 
 ## Encryption Key
 
