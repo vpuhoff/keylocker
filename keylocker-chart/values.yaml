@@ -1,0 +1,161 @@
+# Default values for keylocker-chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1 # Keep for potential long-running script scenarios, though often will be 1 for CLI tasks
+
+image:
+  repository: keylocker # Replace with your actual image repository if you publish it
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  # Defaulting to appVersion is good practice.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# keylocker specific configurations
+keylocker:
+  # Command and arguments to run in the container.
+  # Examples:
+  # To run keylocker CLI to view a config file:
+  # command: ["python", "-m", "keylocker"] # or just ["keylocker"] if it's in PATH
+  # args: ["view", "/etc/keylocker/config.yaml"]
+  # To run a custom python script:
+  # command: ["python"]
+  # args: ["/app/custom_script/my_script.py"]
+  # By default, it will use the Docker image's CMD (which is "python")
+  command: [] # Defaults to image CMD. Example: ["python", "-m", "keylocker.__main__"]
+  args: []    # Example: ["view", "/app/config/myconfig.yaml"]
+
+  # Configuration for environment variables sourced from Kubernetes Secrets.
+  # Users need to create these secrets beforehand.
+  # Example secret creation:
+  # kubectl create secret generic keylocker-secret --from-literal=KEYLOCKER_SECRET_KEY='yourbase64key'
+  # kubectl create secret generic vault-addr-secret --from-literal=VAULT_ADDR='http://your-vault:8200'
+  # kubectl create secret generic vault-token-secret --from-literal=VAULT_TOKEN='yourvaulttoken'
+
+  envVars:
+    # KEYLOCKER_SECRET_KEY: "your_direct_key" # Direct value (less secure, for testing)
+    # VAULT_ADDR: "http://vault.example.com:8200" # Direct value
+    # VAULT_TOKEN: "s.somesecrettoken" # Direct value
+    # Or, more securely, using existing secrets:
+    KEYLOCKER_SECRET_KEY_FROM_SECRET:
+      secretName: "" # Name of the K8s secret, e.g., "keylocker-secret"
+      secretKey: ""  # Key within the secret, e.g., "KEYLOCKER_SECRET_KEY"
+    VAULT_ADDR_FROM_SECRET:
+      secretName: "" # e.g., "vault-config-secret"
+      secretKey: ""  # e.g., "VAULT_ADDR"
+    VAULT_TOKEN_FROM_SECRET:
+      secretName: "" # e.g., "vault-auth-secret"
+      secretKey: ""  # e.g., "VAULT_TOKEN"
+    
+    # Additional generic environment variables can be added here as key-value pairs
+    # customEnvVar1: "value1"
+
+  # Configuration for mounting a custom YAML configuration file for keylocker view
+  # The ConfigMap should be created by the user with their keylocker YAML content.
+  # Example: kubectl create configmap my-keylocker-config --from-file=config.yaml=./path/to/your/config.yaml
+  configFiles:
+    # Example: Mount a 'config.yaml' from a ConfigMap into '/app/config/config.yaml'
+    # - name: "keylocker-config" # Name of the volume mount
+    #   mountPath: "/app/config" # Path inside the container where the file(s) will be mounted
+    #   configMapName: "" # Name of the ConfigMap, e.g., "my-keylocker-config"
+    #   subPath: "" # Optional: if you want to mount a specific file from the ConfigMap, e.g. "config.yaml"
+    #                 # If empty, mounts all keys from ConfigMap as files.
+
+  # Configuration for mounting custom Python scripts that use the keylocker library.
+  # The ConfigMap should be created by the user with their Python script(s).
+  # Example: kubectl create configmap my-python-scripts --from-file=my_script.py=./path/to/your/my_script.py
+  customScripts:
+    # Example: Mount scripts from a ConfigMap into '/app/scripts'
+    # - name: "my-scripts-volume"
+    #   mountPath: "/app/scripts" # Path inside the container
+    #   configMapName: "" # Name of the ConfigMap, e.g., "my-python-scripts"
+
+# Service settings are typically not needed for a CLI tool unless it starts a server.
+# Users can enable this if their custom script runs a service.
+service:
+  enabled: false
+  type: ClusterIP
+  port: 80
+
+# Ingress settings - typically not needed for a CLI tool.
+ingress:
+  enabled: false
+  # className: ""
+  # annotations: {}
+  # hosts:
+  #   - host: chart-example.local
+  #     paths:
+  #       - path: /
+  #         pathType: ImplementationSpecific
+  # tls: []
+
+# Resource requests and limits
+# It's good practice to set these.
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Probes are commented out by default as they are more for long-running services.
+# If your script is a long-running service, configure these.
+# livenessProbe:
+#   httpGet:
+#     path: /
+#     port: http
+# readinessProbe:
+#   httpGet:
+#     path: /
+#     port: http
+
+# Autoscaling is disabled by default.
+autoscaling:
+  enabled: false
+  # minReplicas: 1
+  # maxReplicas: 100
+  # targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# Additional volumes and volumeMounts can be defined here if needed for advanced scenarios.
+# These are merged with volumes/volumeMounts generated for configFiles and customScripts.
+volumes: []
+# Example:
+# - name: host-path-volume
+#   hostPath:
+#     path: /data
+#     type: Directory
+
+volumeMounts: []
+# Example:
+# - name: host-path-volume
+#   mountPath: /mnt/host-data
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
