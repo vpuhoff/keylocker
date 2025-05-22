@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "keylocker-chart.fullname" . }}-test-app"
+  labels:
+    {{- include "keylocker-chart.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: keylocker-test
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      # Attempt to run the keylocker command with --help, which python-fire should provide.
+      # This verifies the entrypoint and basic functioning.
+      command: ['python', '-m', 'keylocker.__main__']
+      args: ['--help']
+      # If KEYLOCKER_SECRET_KEY is strictly required for --help (it shouldn't be),
+      # this test might need to be more complex, potentially mounting a dummy key.
+      # For now, assume --help works without it.
+  restartPolicy: Never

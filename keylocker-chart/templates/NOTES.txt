@@ -1,0 +1,110 @@
+The keylocker Helm chart has been deployed.
+
+This chart allows you to run the keylocker CLI tool or your own Python scripts that use the keylocker library.
+
+---------------------------------------------------------------------------------
+**1. Configuration via `values.yaml`:**
+
+Before installing or upgrading, customize your `values.yaml` or use `--set` flags during `helm install/upgrade`.
+
+Key sections in `values.yaml`:
+  - `image.repository`, `image.tag`: Specify your keylocker Docker image.
+  - `replicaCount`: Usually 1 for CLI tasks.
+  - `keylocker.command`, `keylocker.args`: Define what command and arguments the container should run.
+    - To run keylocker CLI (e.g., view a config):
+      command: ["python", "-m", "keylocker.__main__"] # Or your entrypoint if keylocker is in PATH
+      args: ["view", "/app/config/my-config.yaml"]
+    - To run a custom Python script:
+      command: ["python"]
+      args: ["/app/scripts/my_custom_script.py"]
+  - `keylocker.envVars`: Set environment variables. Sensitive values like KEYLOCKER_SECRET_KEY, VAULT_ADDR, VAULT_TOKEN should be sourced from Kubernetes Secrets.
+  - `keylocker.configFiles`: Mount keylocker configuration files (e.g., your input YAML for `keylocker view`) from ConfigMaps.
+  - `keylocker.customScripts`: Mount your custom Python scripts from ConfigMaps.
+
+---------------------------------------------------------------------------------
+**2. Managing Secrets:**
+
+The application requires secrets for `KEYLOCKER_SECRET_KEY` (for !SEC tags) and potentially `VAULT_ADDR` and `VAULT_TOKEN` (for !VAULT tags).
+These should be stored as Kubernetes Secrets and referenced in `values.yaml`.
+
+**Example Secret Creation:**
+
+a. For `KEYLOCKER_SECRET_KEY`:
+   kubectl create secret generic {{ .Release.Name }}-keylocker-fernet-key --from-literal=KEYLOCKER_SECRET_KEY='YOUR_BASE64_ENCODED_FERNET_KEY' -n {{ .Release.Namespace }}
+   
+   Then in your `values.yaml`:
+   keylocker:
+     envVars:
+       KEYLOCKER_SECRET_KEY_FROM_SECRET:
+         secretName: "{{ .Release.Name }}-keylocker-fernet-key"
+         secretKey: "KEYLOCKER_SECRET_KEY"
+
+b. For Vault Address:
+   kubectl create secret generic {{ .Release.Name }}-vault-addr --from-literal=VAULT_ADDR='http://your-vault-address:8200' -n {{ .Release.Namespace }}
+
+   Then in your `values.yaml`:
+   keylocker:
+     envVars:
+       VAULT_ADDR_FROM_SECRET:
+         secretName: "{{ .Release.Name }}-vault-addr"
+         secretKey: "VAULT_ADDR"
+
+c. For Vault Token:
+   kubectl create secret generic {{ .Release.Name }}-vault-token --from-literal=VAULT_TOKEN='your-vault-token' -n {{ .Release.Namespace }}
+
+   Then in your `values.yaml`:
+   keylocker:
+     envVars:
+       VAULT_TOKEN_FROM_SECRET:
+         secretName: "{{ .Release.Name }}-vault-token"
+         secretKey: "VAULT_TOKEN"
+
+---------------------------------------------------------------------------------
+**3. Using Custom ConfigMaps for Keylocker YAML and Python Scripts:**
+
+a. To provide a `config.yaml` for `keylocker view`:
+   1. Create a ConfigMap:
+      kubectl create configmap {{ .Release.Name }}-keylocker-config --from-file=my-config.yaml=./path/to/your/local/config.yaml -n {{ .Release.Namespace }}
+   2. Configure `values.yaml`:
+      keylocker:
+        configFiles:
+          - name: "keylocker-config-volume"
+            mountPath: "/app/config" # The file will be at /app/config/my-config.yaml
+            configMapName: "{{ .Release.Name }}-keylocker-config"
+            # subPath: "my-config.yaml" # Optional: use if you only want to mount this specific file
+
+b. To provide a custom Python script:
+   1. Create a ConfigMap:
+      kubectl create configmap {{ .Release.Name }}-custom-scripts --from-file=my_script.py=./path/to/your/local/my_script.py -n {{ .Release.Namespace }}
+   2. Configure `values.yaml`:
+      keylocker:
+        customScripts:
+          - name: "keylocker-scripts-volume"
+            mountPath: "/app/scripts" # Your script will be at /app/scripts/my_script.py
+            configMapName: "{{ .Release.Name }}-custom-scripts"
+
+---------------------------------------------------------------------------------
+**4. Accessing Pod Logs:**
+
+To see the output of your keylocker command or custom script, you can view the logs of the pod:
+
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "keylocker-chart.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  kubectl logs $POD_NAME --namespace {{ .Release.Namespace }}
+
+If `replicaCount` > 1 or for more advanced selection, adjust the `POD_NAME` command.
+
+---------------------------------------------------------------------------------
+**5. Example Helm Install Command:**
+
+helm install {{ .Release.Name }} . \
+  --namespace {{ .Release.Namespace }} \
+  --set keylocker.command='{"python", "-m", "keylocker.__main__"}' \
+  --set keylocker.args='{"view", "/app/config/my-config.yaml"}' \
+  --set keylocker.envVars.KEYLOCKER_SECRET_KEY_FROM_SECRET.secretName='{{ .Release.Name }}-keylocker-fernet-key' \
+  --set keylocker.envVars.KEYLOCKER_SECRET_KEY_FROM_SECRET.secretKey='KEYLOCKER_SECRET_KEY' \
+  --set keylocker.configFiles[0].name='keylocker-config-volume' \
+  --set keylocker.configFiles[0].mountPath='/app/config' \
+  --set keylocker.configFiles[0].configMapName='{{ .Release.Name }}-keylocker-config'
+  # Add other --set flags as needed for Vault, custom scripts, etc.
+
+Remember to create the referenced secrets and configmaps before installing the chart if they are required by your configuration.

@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keylocker-chart.fullname" . }}
+  labels:
+    {{- include "keylocker-chart.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "keylocker-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "keylocker-chart.selectorLabels" . | nindent 8 }} # Use selectorLabels for consistency
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "keylocker-chart.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.keylocker.command }}
+          command: {{ toYaml .Values.keylocker.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.keylocker.args }}
+          args: {{ toYaml .Values.keylocker.args | nindent 12 }}
+          {{- end }}
+          env:
+            {{- /* Direct environment variables specified in values.yaml */}}
+            {{- range $key, $value := .Values.keylocker.envVars }}
+            {{- if not (kindIs "map" $value) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- /* Environment variables sourced from secrets */}}
+            {{- if .Values.keylocker.envVars.KEYLOCKER_SECRET_KEY_FROM_SECRET.secretName }}
+            - name: KEYLOCKER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.keylocker.envVars.KEYLOCKER_SECRET_KEY_FROM_SECRET.secretName }}
+                  key: {{ .Values.keylocker.envVars.KEYLOCKER_SECRET_KEY_FROM_SECRET.secretKey }}
+            {{- end }}
+            {{- if .Values.keylocker.envVars.VAULT_ADDR_FROM_SECRET.secretName }}
+            - name: VAULT_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.keylocker.envVars.VAULT_ADDR_FROM_SECRET.secretName }}
+                  key: {{ .Values.keylocker.envVars.VAULT_ADDR_FROM_SECRET.secretKey }}
+            {{- end }}
+            {{- if .Values.keylocker.envVars.VAULT_TOKEN_FROM_SECRET.secretName }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.keylocker.envVars.VAULT_TOKEN_FROM_SECRET.secretName }}
+                  key: {{ .Values.keylocker.envVars.VAULT_TOKEN_FROM_SECRET.secretKey }}
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- $allVolumeMounts := list }}
+          {{- if .Values.keylocker.configFiles }}
+            {{- range .Values.keylocker.configFiles }}
+              {{- $vm := dict "name" .name "mountPath" .mountPath }}
+              {{- if .subPath }}
+                {{- $_ := set $vm "subPath" .subPath }}
+              {{- end }}
+              {{- $allVolumeMounts = append $allVolumeMounts $vm }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.keylocker.customScripts }}
+            {{- range .Values.keylocker.customScripts }}
+              {{- $allVolumeMounts = append $allVolumeMounts (dict "name" .name "mountPath" .mountPath) }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.volumeMounts }}
+            {{- $allVolumeMounts = concat $allVolumeMounts .Values.volumeMounts }}
+          {{- end }}
+          {{- if $allVolumeMounts }}
+          volumeMounts:
+            {{- toYaml $allVolumeMounts | nindent 12 }}
+          {{- end }}
+          {{- /* Ports are removed by default, user can add if their script needs it via values */}}
+          {{- /* Liveness and readiness probes are removed by default */}}
+      {{- $allVolumes := list }}
+      {{- if .Values.keylocker.configFiles }}
+        {{- range .Values.keylocker.configFiles }}
+          {{- $allVolumes = append $allVolumes (dict "name" .name "configMap" (dict "name" .configMapName)) }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.keylocker.customScripts }}
+        {{- range .Values.keylocker.customScripts }}
+          {{- $allVolumes = append $allVolumes (dict "name" .name "configMap" (dict "name" .configMapName)) }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.volumes }}
+        {{- $allVolumes = concat $allVolumes .Values.volumes }}
+      {{- end }}
+      {{- if $allVolumes }}
+      volumes:
+        {{- toYaml $allVolumes | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
