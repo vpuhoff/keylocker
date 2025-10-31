@@ -2,6 +2,9 @@
 
 name: Build, Test, and Publish Python Package (Pipenv)
 
+permissions:
+  contents: read
+
 # Триггеры запуска:
 on:
   push:
