@@ -5,8 +5,12 @@ verify_ssl = true
 
 [dev-packages]
 pytest = "*"
+pytest-mock = "*"
+coverage = "*"
+pytest-cov = "*"
 
 [packages]
 cryptography = "==44.0.1"
 fire = "==0.1.3"
 pyyaml = "*"
+hvac = "*"
