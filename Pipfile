@@ -8,5 +8,5 @@ pytest = "*"
 
 [packages]
 cryptography = "==44.0.1"
-fire = "==0.1.3"
+fire = "==0.7.1"
 pyyaml = "*"
