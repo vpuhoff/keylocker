@@ -19,7 +19,7 @@ jobs:
   # Задача для сборки и тестирования
   build_and_test:
     name: Build & Test (Python 3.10)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
     - name: Checkout code
@@ -66,7 +66,7 @@ jobs:
   deploy:
     name: Deploy to PyPI
     needs: build_and_test # Зависит от успешной сборки/тестов
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Условие запуска: только если событие - это push тега
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
 
