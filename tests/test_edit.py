@@ -169,7 +169,7 @@ def test_edit_editor_missing(config, key_file, monkeypatch, caplog):
 
 
 def test_edit_invalid_yaml_reopens_editor(config, key_file, editor, monkeypatch):
-    monkeypatch.setattr(keylocker, '_confirm', lambda prompt: True)
+    monkeypatch.setattr(keylocker, '_confirm', lambda prompt, default=True: True)
     fake = editor("a: [broken\n", "a: !SEC fixed\n")
     Manager(key_file).edit(config)
     assert fake.seen[1] == "a: [broken\n"
@@ -178,7 +178,7 @@ def test_edit_invalid_yaml_reopens_editor(config, key_file, editor, monkeypatch)
 
 def test_edit_invalid_yaml_declined(config, key_file, editor, monkeypatch, caplog):
     before = open(config, 'rb').read()
-    monkeypatch.setattr(keylocker, '_confirm', lambda prompt: False)
+    monkeypatch.setattr(keylocker, '_confirm', lambda prompt, default=True: False)
     fake = editor("a: [broken\n")
     with pytest.raises(SystemExit) as excinfo:
         Manager(key_file).edit(config)
@@ -189,7 +189,7 @@ def test_edit_invalid_yaml_declined(config, key_file, editor, monkeypatch, caplo
 
 
 def test_edit_rejects_sec_on_non_scalar(config, key_file, editor, monkeypatch, caplog):
-    monkeypatch.setattr(keylocker, '_confirm', lambda prompt: False)
+    monkeypatch.setattr(keylocker, '_confirm', lambda prompt, default=True: False)
     editor("a: !SEC [1, 2]\n")
     with pytest.raises(SystemExit):
         Manager(key_file).edit(config)
@@ -198,7 +198,7 @@ def test_edit_rejects_sec_on_non_scalar(config, key_file, editor, monkeypatch, c
 
 def test_edit_editor_deleting_file(config, key_file, monkeypatch, caplog):
     before = open(config, 'rb').read()
-    monkeypatch.setattr(keylocker, '_confirm', lambda prompt: False)
+    monkeypatch.setattr(keylocker, '_confirm', lambda prompt, default=True: False)
     monkeypatch.setattr(keylocker, '_run_editor', lambda path: (os.unlink(path), 0)[1])
     with pytest.raises(SystemExit):
         Manager(key_file).edit(config)
@@ -288,6 +288,74 @@ def test_edit_reuses_tokens_of_old_keys(tmp_path, key, key_file, editor):
     assert old_token in open(path).read()
 
 
+def _answers(monkeypatch, *answers):
+    """Scripts _confirm: returns the given answers in order and records the prompts."""
+    prompts, queue = [], list(answers)
+    monkeypatch.setattr(keylocker, '_confirm',
+                        lambda prompt, default=True: prompts.append(prompt) or queue.pop(0))
+    return prompts
+
+
+def test_edit_dropped_sec_tag_asks_before_saving_plaintext(config, key_file, editor,
+                                                          monkeypatch, caplog):
+    before = open(config, 'rb').read()
+    prompts = _answers(monkeypatch, False, False)
+    editor(lambda text: text.replace('!SEC "tkn"', '"tkn"'))
+    with pytest.raises(SystemExit) as excinfo:
+        Manager(key_file).edit(config)
+    assert excinfo.value.code == 1
+    assert open(config, 'rb').read() == before
+    assert "1 !SEC value(s) fewer" in caplog.text
+    assert prompts == ["Save anyway? [y/N] ", "Re-open the editor? [Y/n] "]
+
+
+def test_edit_dropped_sec_tag_reopen_and_fix(config, key_file, editor, monkeypatch):
+    _answers(monkeypatch, False, True)
+    fake = editor(lambda text: text.replace('!SEC "tkn"', '"tkn"'),
+                  lambda text: text.replace('"tkn"', '!SEC "tkn"'))
+    Manager(key_file).edit(config)
+    assert len(fake.seen) == 2
+    assert "tkn" not in open(config).read()
+
+
+def test_edit_dropped_sec_tag_confirmed(config, key_file, editor, monkeypatch):
+    _answers(monkeypatch, True)
+    editor(lambda text: text.replace('  token: !SEC "tkn"\n', ''))
+    Manager(key_file).edit(config)
+    assert 'token' not in load_yaml_secrets(config, key_file)['api']
+
+
+def test_edit_new_duplicate_value_gets_fresh_token(tmp_path, key, key_file, editor):
+    token_a, token_b = _token(key, 'same'), _token(key, 'other')
+    path = _write(tmp_path, f"a: !SEC {token_a}\nb: !SEC {token_b}\n")
+    editor(lambda text: text.replace('"other"', '"same"'))
+    Manager(key_file).edit(path)
+    after = yaml.safe_load(open(path).read().replace('!SEC', ''))
+    assert after['a'] == token_a
+    assert after['b'] not in (token_a, token_b)
+    assert load_yaml_secrets(path, key_file) == {'a': 'same', 'b': 'same'}
+
+
+def test_edit_reuses_token_by_path_not_by_order(tmp_path, key, key_file, editor):
+    """A copy inserted above the original gets a fresh token; the original line stays intact."""
+    token_a = _token(key, 'same')
+    path = _write(tmp_path, f"a: !SEC {token_a}\n")
+    editor(lambda text: 'z: !SEC "same"\n' + text)
+    Manager(key_file).edit(path)
+    lines = open(path).read().splitlines()
+    assert lines[1] == f"a: !SEC {token_a}"
+    assert lines[0].startswith("z: !SEC gAAAAA") and token_a not in lines[0]
+
+
+def test_edit_keeps_distinct_tokens_of_equal_values(tmp_path, key, key_file, editor):
+    first, second = _token(key, 'dup'), _token(key, 'dup')
+    source = f"x:\n  - !SEC {first}\n  - !SEC {second}\ny: !SEC {_token(key, 'z')}\n"
+    path = _write(tmp_path, source)
+    editor(lambda text: text.replace('"z"', '"w"'))
+    Manager(key_file).edit(path)
+    assert open(path).read().startswith(f"x:\n  - !SEC {first}\n  - !SEC {second}\n")
+
+
 def test_cli_edit(config, key_file, editor):
     editor(lambda text: text.replace('"tkn"', '"via-cli"'))
     assert main(['edit', '--key-file', key_file, config]) == 0
@@ -313,6 +381,24 @@ def test_block_scalar_keeps_following_lines(key):
     text, known = keylocker._decrypt_for_edit(source, fernet)
     assert text == 'a: !SEC "blk"\n\nb: 1\n'
     assert keylocker._encrypt_after_edit(text, fernet, known) == f"a: !SEC {token}\n\nb: 1\n"
+
+
+def test_sec_scalars_paths(key):
+    token = _token(key, 's')
+    source = (f"---\n---\nbase: &b\n  k: !SEC {token}\ncopy: *b\nlist: [1, !SEC {token}]\n"
+              f"? [complex]\n: !SEC {token}\n!SEC {token}: v\n")
+    paths = [path for *_, path in keylocker._sec_scalars(source, 'cfg.yaml')]
+    assert paths == [(1, 'base', 'k'), (1, 'list', 1), (1, None), None]
+
+
+def test_sec_mapping_key_reuses_token_by_value(key):
+    """A !SEC key has no path, so its token is matched by value alone."""
+    fernet = MultiFernet([Fernet(key)])
+    key_token, value_token = _token(key, 'k'), _token(key, 'v')
+    source = f"!SEC {key_token}: !SEC {value_token}\n"
+    text, known = keylocker._decrypt_for_edit(source, fernet)
+    assert text == '!SEC "k": !SEC "v"\n'
+    assert keylocker._encrypt_after_edit(text, fernet, known) == source
 
 
 def test_encrypt_after_edit_failure_hides_plaintext():
@@ -393,6 +479,9 @@ def test_confirm(monkeypatch, capsys):
     for answer, expected in [("\n", True), ("y\n", True), ("YES\n", True), ("n\n", False)]:
         monkeypatch.setattr(sys, 'stdin', Stdin(answer))
         assert keylocker._confirm("? ") is expected
+    for answer, expected in [("\n", False), ("y\n", True), ("n\n", False)]:
+        monkeypatch.setattr(sys, 'stdin', Stdin(answer))
+        assert keylocker._confirm("? ", False) is expected
     assert "? " in capsys.readouterr().err
     monkeypatch.setattr(sys, 'stdin', Stdin("y\n", tty=False))
     assert keylocker._confirm("? ") is False
