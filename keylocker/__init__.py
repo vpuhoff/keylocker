@@ -313,13 +313,37 @@ def _read_text(file_path):
     except OSError as e:
         raise ConfigError(f"Could not read YAML file '{file_path}': {e}") from None
 
+def _scalar_paths(documents):
+    """Maps the end index of every scalar value node to its path (document index, keys/indexes)."""
+    paths, seen = {}, set()
+
+    def walk(node, path):
+        if isinstance(node, yaml.ScalarNode):
+            paths.setdefault(node.end_mark.index, path)
+            return
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                walk(value, path + (key.value if isinstance(key, yaml.ScalarNode) else None,))
+        else:
+            for index, item in enumerate(node.value):
+                walk(item, path + (index,))
+
+    for index, document in enumerate(documents):
+        if document is not None:
+            walk(document, (index,))
+    return paths
+
 def _sec_scalars(text, file_path):
     """
-    Returns (start, end, value, mark) for every scalar tagged !SEC, where start:end is the
-    scalar's span in text (quotes and block indicators included, tag and anchor excluded).
+    Returns (start, end, value, mark, path) for every scalar tagged !SEC, where start:end is
+    the scalar's span in text (quotes and block indicators included, tag and anchor excluded)
+    and path locates it in the document (None for mapping keys).
     """
     try:
-        list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+        paths = _scalar_paths(yaml.compose_all(text, Loader=yaml.SafeLoader))
         tokens = list(yaml.scan(text, Loader=yaml.SafeLoader))
     except yaml.YAMLError as e:
         raise ConfigError(f"Failed to parse YAML file '{file_path}': {e}") from None
@@ -336,7 +360,7 @@ def _sec_scalars(text, file_path):
                 raise ConfigError(f"!SEC at {_position(tag.start_mark)} must tag a single "
                                   "string value.")
             scalars.append((token.start_mark.index, token.end_mark.index, token.value,
-                            tag.start_mark))
+                            tag.start_mark, paths.get(token.end_mark.index)))
             tag = None
     return scalars
 
@@ -370,7 +394,7 @@ def rotate_yaml_file(file_path, key_file=None):
 
     text = _read_text(file_path)
     replacements = []
-    for start, end, value, mark in _sec_scalars(text, file_path):
+    for start, end, value, mark, _path in _sec_scalars(text, file_path):
         token = value.strip()
         try:
             primary.decrypt(token.encode())
@@ -399,25 +423,43 @@ def _quote_plaintext(value):
 def _decrypt_for_edit(text, fernet, file_path='<string>'):
     """
     Replaces every !SEC token in YAML text with its plaintext as a double-quoted scalar.
-    Returns the editable text and a plaintext -> token map for _encrypt_after_edit().
+    Returns the editable text and a list of (path, plaintext, token), one per secret,
+    for _encrypt_after_edit().
     """
-    known = {}
+    known = []
     replacements = []
-    for start, end, value, mark in _sec_scalars(text, file_path):
+    for start, end, value, mark, path in _sec_scalars(text, file_path):
         plaintext = _decrypt_token(fernet, value, mark)
-        known.setdefault(plaintext, value.strip())
+        known.append((path, plaintext, value.strip()))
         replacements.append((start, end, _quote_plaintext(plaintext)))
     return _replace_scalars(text, replacements), known
 
-def _encrypt_after_edit(text, fernet, known=None, file_path='<string>'):
+def _encrypt_after_edit(text, fernet, known=(), file_path='<string>'):
     """
-    Encrypts every !SEC plaintext in YAML text. Values found in known (from
-    _decrypt_for_edit()) keep their original token, so unchanged secrets stay byte-identical.
+    Encrypts every !SEC plaintext in YAML text. An unchanged secret keeps its original token
+    from known (from _decrypt_for_edit()), preferably the one at the same path, so it stays
+    byte-identical. Each original token is reused at most once: a value changed to equal
+    another secret is encrypted afresh, so an edit never makes two values share a token.
     """
-    known = known or {}
+    scalars = _sec_scalars(text, file_path)
+    unused = list(known)
+    tokens = [None] * len(scalars)
+
+    def claim(index, matches):
+        for position, entry in enumerate(unused):
+            if matches(entry):
+                tokens[index] = unused.pop(position)[2]
+                return
+
+    for index, (_, _, value, _, path) in enumerate(scalars):
+        if path is not None:
+            claim(index, lambda entry: entry[0] == path and entry[1] == value)
+    for index, (_, _, value, _, _) in enumerate(scalars):
+        if tokens[index] is None:
+            claim(index, lambda entry: entry[1] == value)
+
     replacements = []
-    for start, end, value, mark in _sec_scalars(text, file_path):
-        token = known.get(value)
+    for (start, end, value, mark, _), token in zip(scalars, tokens):
         if token is None:
             try:
                 token = fernet.encrypt(value.encode()).decode()
@@ -511,12 +553,14 @@ def _run_editor(path):
         return subprocess.call(f'{editor} "{path}"', shell=True)
     return subprocess.call(shlex.split(editor) + [path])
 
-def _confirm(prompt):
+def _confirm(prompt, default=True):
+    """Asks a yes/no question on the terminal; without a terminal the answer is always no."""
     if not sys.stdin.isatty():
         return False
     sys.stderr.write(prompt)
     sys.stderr.flush()
-    return sys.stdin.readline().strip().lower() in ('', 'y', 'yes')
+    answer = sys.stdin.readline().strip().lower()
+    return default if answer == '' else answer in ('y', 'yes')
 
 def _plaintext_tempfile(suffix):
     """A 0600 temp file for decrypted content, in RAM-backed /dev/shm when available."""
@@ -681,12 +725,22 @@ class Manager(object):
                         logger.info("No changes; '%s' left unchanged.", yaml_file)
                         return
                     result = _encrypt_after_edit(edited, fernet, known, yaml_file)
-                    break
+                    removed = len(known) - len(_sec_scalars(edited, yaml_file))
                 except (KeylockerError, UnicodeDecodeError, OSError) as e:
                     logger.error("%s", e)
                     if not _confirm("Re-open the editor to fix it? [Y/n] "):
                         logger.error("'%s' left unchanged.", yaml_file)
                         sys.exit(1)
+                    continue
+                if removed <= 0:
+                    break
+                logger.warning("The file now has %d !SEC value(s) fewer than before. A value whose "
+                               "!SEC tag was deleted is saved in plaintext.", removed)
+                if _confirm("Save anyway? [y/N] ", False):
+                    break
+                if not _confirm("Re-open the editor? [Y/n] "):
+                    logger.error("'%s' left unchanged.", yaml_file)
+                    sys.exit(1)
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_path)
