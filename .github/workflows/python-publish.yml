@@ -8,11 +8,12 @@ permissions:
 # Триггеры запуска:
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
     tags:
       - 'v*.*.*'
+  # Тесты и сборка запускаются на ЛЮБОМ pull request (без фильтра по веткам),
+  # чтобы каждый PR проверялся перед вливанием
   pull_request:
-    branches: [ master, main ]
 
 jobs:
   # Задача для сборки и тестирования
