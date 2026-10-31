@@ -27,6 +27,12 @@ pip install keylocker
 
 The package is available on PyPI: [https://pypi.org/project/keylocker/](https://pypi.org/project/keylocker/)
 
+Runtime dependencies are declared in `pyproject.toml` and installed automatically
+by pip. `Pipfile` and both requirements files use the same supported ranges;
+`Pipfile.lock` records exact versions for reproducible development and CI.
+Tests check these declarations for drift, and CI smoke-tests the built wheel
+in a fresh virtualenv without Pipenv or an editable source install.
+
 ## Example YAML file (`config.yaml`):
 
 ```yaml

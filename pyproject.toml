@@ -17,7 +17,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities",
 ]
-dependencies = [] 
+dependencies = [
+    "cryptography>=50.0.2,<51",
+    "fire>=0.7.1,<0.8",
+    "PyYAML>=6.0.3,<7",
+]
 
 # Стандартная секция для определения скриптов/точек входа
 
