@@ -15,3 +15,10 @@ setup.py
 poetry.lock
 Pipfile.lock
 .vscode/settings.json
+
+# Local coverage reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
