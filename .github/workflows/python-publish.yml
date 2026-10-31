@@ -18,8 +18,12 @@ on:
 jobs:
   # Задача для сборки и тестирования
   build_and_test:
-    name: Build & Test (Python 3.10)
+    name: Build & Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
 
     steps:
     - name: Checkout code
@@ -29,7 +33,7 @@ jobs:
       id: setup_python
       uses: actions/setup-python@v7
       with:
-        python-version: '3.15'
+        python-version: ${{ matrix.python-version }}
 
     - name: Install Pipenv
       run: python -m pip install --upgrade pip pipenv
@@ -46,20 +50,23 @@ jobs:
           ${{ runner.os }}-pipenv-${{ steps.setup_python.outputs.python-version }}-
 
     - name: Install dependencies using Pipenv
-      run: pipenv install --dev # Устанавливаем основные и dev зависимости
+      run: pipenv sync --dev # Устанавливаем версии из Pipfile.lock без перегенерации
 
     - name: Run tests (pytest via Pipenv)
       run: pipenv run pytest tests/ # Запускаем тесты через pipenv run
 
     # Сборка пакета (sdist и wheel) стандартным способом
     - name: Install build tools
-      run: pipenv install --dev build # Добавляем 'build' в dev зависимости
+      if: matrix.python-version == '3.10'
+      run: pipenv run python -m pip install build
 
     - name: Build package
+      if: matrix.python-version == '3.10'
       run: pipenv run python -m build # Стандартная команда сборки
 
     # Загрузка артефактов сборки
     - name: Upload build artifacts
+      if: matrix.python-version == '3.10'
       uses: actions/upload-artifact@v7
       with:
         name: dist-python-3.10
@@ -81,7 +88,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v7
 
-    - name: Set up Python 3.10
+    - name: Set up Python
       uses: actions/setup-python@v7
       with:
         python-version: '3.15'
