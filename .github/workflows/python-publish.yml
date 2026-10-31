@@ -24,10 +24,16 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
+    env:
+      # Always create a fresh virtualenv; only dependency downloads are cached.
+      PIPENV_VENV_IN_PROJECT: "true"
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        # Dynamic versions need reachable Git tags and complete history.
+        fetch-depth: 0
 
     - name: Set up Python
       id: setup_python
@@ -38,16 +44,14 @@ jobs:
     - name: Install Pipenv
       run: python -m pip install --upgrade pip pipenv
 
-    # Кэширование Pipenv окружения для ускорения
-    # В ключ включена версия Python: venv из кэша, созданный другой версией,
-    # содержит битые absolute symlinks на интерпретатор
-    - name: Cache Pipenv virtualenv
+    # Cache downloads, not installed packages: stale venvs can hide broken locks.
+    - name: Cache dependency downloads
       uses: actions/cache@v6
       with:
-        path: ~/.local/share/virtualenvs # Стандартный путь Pipenv для virtualenv
-        key: ${{ runner.os }}-pipenv-${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('**/Pipfile.lock') }}
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-${{ runner.arch }}-pip-downloads-${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('**/Pipfile.lock', 'pyproject.toml') }}
         restore-keys: |
-          ${{ runner.os }}-pipenv-${{ steps.setup_python.outputs.python-version }}-
+          ${{ runner.os }}-${{ runner.arch }}-pip-downloads-${{ steps.setup_python.outputs.python-version }}-
 
     - name: Install dependencies using Pipenv
       run: pipenv sync --dev # Устанавливаем версии из Pipfile.lock без перегенерации
@@ -63,6 +67,12 @@ jobs:
     - name: Build package
       if: matrix.python-version == '3.10'
       run: pipenv run python -m build # Стандартная команда сборки
+
+    - name: Verify distribution versions
+      if: matrix.python-version == '3.10'
+      env:
+        RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      run: pipenv run python scripts/verify_distribution.py dist/
 
     # Загрузка артефактов сборки
     - name: Upload build artifacts
