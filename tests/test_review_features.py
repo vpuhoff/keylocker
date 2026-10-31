@@ -344,16 +344,19 @@ def test_rotate_yaml_file_verbatim_tag(tmp_path, key_file):
     assert load_yaml_secrets(path, key_file) == {'a': 'x'}
 
 
-def test_rotate_yaml_file_escaped_token_is_refused(tmp_path, key_file):
+def test_rotate_yaml_file_escaped_token(tmp_path, key_file):
     old = open(key_file, 'rb').read()
     Manager(key_file).init(rotate=True)
     token = _token(old, 'x')
-    source = f'a: !SEC "\\x{ord(token[0]):02x}{token[1:]}"\n'
-    path = _write(tmp_path, source)
+    path = _write(tmp_path, f'a: !SEC "\\x{ord(token[0]):02x}{token[1:]}"  # c\n')
+    assert rotate_yaml_file(path, key_file) == 1
+    assert open(path).read().endswith("  # c\n")
     assert load_yaml_secrets(path, key_file) == {'a': 'x'}
-    with pytest.raises(ConfigError, match="in place"):
-        rotate_yaml_file(path, key_file)
-    assert open(path).read() == source
+
+
+def test_rotate_yaml_file_rejects_non_scalar_sec(tmp_path, key_file):
+    with pytest.raises(ConfigError, match="line 1, column 4.*single string"):
+        rotate_yaml_file(_write(tmp_path, "a: !SEC [1, 2]\n"), key_file)
 
 
 @pytest.mark.skipif(os.name == 'nt', reason="POSIX permissions")

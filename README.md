@@ -124,7 +124,16 @@ Global options (accepted before or after the command): `--key-file PATH` (alias 
     ```
     > **CI/CD caution:** `view` prints every secret in plaintext. Never run it bare in a CI job: its output ends up in build logs. Capture it into a variable or pipe it straight into the consumer (`keylocker view config.yaml | yq ...`), and register extracted values with your CI's secret masking (for example `echo "::add-mask::$DB_PASS"` on GitHub Actions).
 
-4.  **Re-encrypt with the primary key (rotation):**
+4.  **Edit secrets in your editor (like `ansible-vault edit`):**
+    * Decrypts every `!SEC` value into a temporary copy, opens it in `$VISUAL` / `$EDITOR` (default: `notepad` on Windows, `vi` elsewhere) and encrypts the file back when the editor exits. Comments and layout are kept.
+    * In the editor secrets look like `password: !SEC "plaintext"`. Change them, or add new ones as `!SEC new value`: every `!SEC` value is encrypted on save. Unchanged secrets keep their exact ciphertext, so the git diff shows only what you edited.
+    * The temporary copy is created with mode `0600` (in RAM-backed `/dev/shm` when available) and deleted afterwards. If the editor exits with an error, nothing is saved; if the result is not valid YAML, you are offered to re-open the editor.
+    * GUI editors must wait until the file is closed, e.g. `EDITOR="code --wait"`.
+    ```bash
+    keylocker edit config.yaml
+    ```
+
+5.  **Re-encrypt with the primary key (rotation):**
     ```bash
     keylocker rotate config.yaml [more.yaml ...]
     ```
@@ -189,7 +198,7 @@ with open('config.yaml', 'w') as f:
     yaml.dump(data, f, Dumper=keylocker_dumper(), sort_keys=False)
 ```
 
-(PyYAML drops comments when dumping; use `keylocker rotate` for re-encryption, which keeps the file intact.)
+(PyYAML drops comments when dumping. To change secrets while keeping comments and layout, use `keylocker edit`.)
 
 ### Logging
 

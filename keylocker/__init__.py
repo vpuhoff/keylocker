@@ -1,10 +1,14 @@
 # keylocker/__init__.py
 
 import argparse
+import contextlib
 import getpass
+import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 import sys
 import tempfile
 import warnings
@@ -135,9 +139,9 @@ class SecureString(str):
 class EnvVariable(str):
     """A variable reference (NAME or NAME:-default) written as !ENV by keylocker_dumper()."""
 
-def _position(node):
-    # str(node.start_mark) embeds a snippet of the source YAML, which may hold other secrets.
-    return f"line {node.start_mark.line + 1}, column {node.start_mark.column + 1}"
+def _position(mark):
+    # str(mark) embeds a snippet of the source YAML, which may hold other secrets.
+    return f"line {mark.line + 1}, column {mark.column + 1}"
 
 def _resolve_env(reference, position, strict):
     name, separator, default = reference.partition(ENV_DEFAULT_SEPARATOR)
@@ -172,7 +176,7 @@ def keylocker_loader(key_file=None, strict=False, round_trip=False):
 
     def sec_constructor(loader, node):
         value = loader.construct_scalar(node)
-        position = _position(node)
+        position = _position(node.start_mark)
         if fernet is None:
             raise DecryptionError(
                 f"Cannot decrypt !SEC value at {position}: no valid key is loaded."
@@ -193,7 +197,7 @@ def keylocker_loader(key_file=None, strict=False, round_trip=False):
         reference = loader.construct_scalar(node)
         if round_trip:
             return EnvVariable(reference)
-        return _resolve_env(reference, _position(node), strict)
+        return _resolve_env(reference, _position(node.start_mark), strict)
 
     KeylockerLoader.add_constructor('!SEC', sec_constructor)
     KeylockerLoader.add_constructor('!ENV', env_constructor)
@@ -297,20 +301,58 @@ def encrypt_string_value(value_to_encrypt, key_file=None):
         logger.error("An unexpected error occurred during encryption: %s", type(e).__name__)
         return None
 
-def _iter_sec_nodes(node, seen):
-    if id(node) in seen:
-        return
-    seen.add(id(node))
-    if isinstance(node, yaml.ScalarNode):
-        if node.tag == '!SEC':
-            yield node
-    elif isinstance(node, yaml.SequenceNode):
-        for child in node.value:
-            yield from _iter_sec_nodes(child, seen)
-    else:
-        for key, value in node.value:
-            yield from _iter_sec_nodes(key, seen)
-            yield from _iter_sec_nodes(value, seen)
+def _read_text(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            return f.read().decode('utf-8')
+    except FileNotFoundError:
+        raise ConfigError(f"Input YAML file '{file_path}' not found.") from None
+    except UnicodeDecodeError as e:
+        raise ConfigError(f"Failed to parse YAML file '{file_path}': {e}") from None
+    except OSError as e:
+        raise ConfigError(f"Could not read YAML file '{file_path}': {e}") from None
+
+def _sec_scalars(text, file_path):
+    """
+    Returns (start, end, value, mark) for every scalar tagged !SEC, where start:end is the
+    scalar's span in text (quotes and block indicators included, tag and anchor excluded).
+    """
+    try:
+        list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+        tokens = list(yaml.scan(text, Loader=yaml.SafeLoader))
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Failed to parse YAML file '{file_path}': {e}") from None
+    scalars = []
+    tag = None
+    for token in tokens:
+        if isinstance(token, yaml.TagToken):
+            handle, suffix = token.value
+            tag = token if (handle or '') + suffix == '!SEC' else None
+        elif isinstance(token, yaml.AnchorToken):
+            continue
+        elif tag is not None:
+            if not isinstance(token, yaml.ScalarToken):
+                raise ConfigError(f"!SEC at {_position(tag.start_mark)} must tag a single "
+                                  "string value.")
+            scalars.append((token.start_mark.index, token.end_mark.index, token.value,
+                            tag.start_mark))
+            tag = None
+    return scalars
+
+def _replace_scalars(text, replacements):
+    """Applies (start, end, new_scalar) replacements, keeping a block scalar's trailing breaks."""
+    for start, end, scalar in sorted(replacements, reverse=True):
+        source = text[start:end]
+        text = text[:start] + scalar + source[len(source.rstrip()):] + text[end:]
+    return text
+
+def _decrypt_token(fernet, token, mark):
+    try:
+        return fernet.decrypt(token.strip().encode()).decode()
+    except (InvalidToken, UnicodeDecodeError):
+        raise DecryptionError(
+            f"Failed to decrypt !SEC value at {_position(mark)}: invalid token or key mismatch."
+        ) from None
 
 def rotate_yaml_file(file_path, key_file=None):
     """
@@ -325,47 +367,64 @@ def rotate_yaml_file(file_path, key_file=None):
     primary = Fernet(keys[0])
     fernet = MultiFernet([Fernet(key) for key in keys])
 
-    try:
-        with open(file_path, 'rb') as f:
-            text = f.read().decode('utf-8')
-        documents = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
-    except FileNotFoundError:
-        raise ConfigError(f"Input YAML file '{file_path}' not found.") from None
-    except (yaml.YAMLError, UnicodeDecodeError) as e:
-        raise ConfigError(f"Failed to parse YAML file '{file_path}': {e}") from None
-    except OSError as e:
-        raise ConfigError(f"Could not read YAML file '{file_path}': {e}") from None
-
-    seen = set()
+    text = _read_text(file_path)
     replacements = []
-    for document in documents:
-        for node in _iter_sec_nodes(document, seen):
-            token = node.value.strip()
-            position = _position(node)
-            try:
-                primary.decrypt(token.encode())
-                continue
-            except InvalidToken:
-                pass
-            try:
-                rotated = fernet.rotate(token.encode()).decode()
-            except InvalidToken:
-                raise DecryptionError(
-                    f"Failed to decrypt !SEC value at {position}: invalid token or key mismatch."
-                ) from None
-            # Swap only the token text so quotes, block style, anchors and comments survive.
-            offset = text.rfind(token, node.start_mark.index, node.end_mark.index)
-            if offset < 0:
-                raise ConfigError(f"Cannot rewrite the !SEC value at {position} in place "
-                                  "(escaped or split token).")
-            replacements.append((offset, offset + len(token), rotated))
+    for start, end, value, mark in _sec_scalars(text, file_path):
+        token = value.strip()
+        try:
+            primary.decrypt(token.encode())
+            continue
+        except InvalidToken:
+            pass
+        try:
+            rotated = fernet.rotate(token.encode()).decode()
+        except InvalidToken:
+            raise DecryptionError(
+                f"Failed to decrypt !SEC value at {_position(mark)}: invalid token or key mismatch."
+            ) from None
+        replacements.append((start, end, rotated))
 
     if not replacements:
         return 0
-    for start, end, replacement in sorted(replacements, reverse=True):
-        text = text[:start] + replacement + text[end:]
+    text = _replace_scalars(text, replacements)
     _atomic_replace(file_path, text.encode('utf-8'), mode=os.stat(file_path).st_mode & 0o7777)
     return len(replacements)
+
+def _quote_plaintext(value):
+    """A double-quoted YAML scalar for value; JSON strings are valid YAML, minus raw C1 controls."""
+    quoted = json.dumps(value, ensure_ascii=False)
+    return re.sub(r'[\x7f-\x9f]', lambda m: f"\\u{ord(m.group()):04x}", quoted)
+
+def _decrypt_for_edit(text, fernet, file_path='<string>'):
+    """
+    Replaces every !SEC token in YAML text with its plaintext as a double-quoted scalar.
+    Returns the editable text and a plaintext -> token map for _encrypt_after_edit().
+    """
+    known = {}
+    replacements = []
+    for start, end, value, mark in _sec_scalars(text, file_path):
+        plaintext = _decrypt_token(fernet, value, mark)
+        known.setdefault(plaintext, value.strip())
+        replacements.append((start, end, _quote_plaintext(plaintext)))
+    return _replace_scalars(text, replacements), known
+
+def _encrypt_after_edit(text, fernet, known=None, file_path='<string>'):
+    """
+    Encrypts every !SEC plaintext in YAML text. Values found in known (from
+    _decrypt_for_edit()) keep their original token, so unchanged secrets stay byte-identical.
+    """
+    known = known or {}
+    replacements = []
+    for start, end, value, mark in _sec_scalars(text, file_path):
+        token = known.get(value)
+        if token is None:
+            try:
+                token = fernet.encrypt(value.encode()).decode()
+            except Exception as e:
+                raise EncryptionError(f"Failed to encrypt !SEC value at {_position(mark)}: "
+                                      f"{type(e).__name__}") from None
+        replacements.append((start, end, token))
+    return _replace_scalars(text, replacements)
 
 # --- File Writing ---
 
@@ -438,6 +497,30 @@ def _read_secret_interactively():
         logger.error("Values do not match.")
         return None
     return value
+
+def _editor_command():
+    return (os.environ.get('VISUAL') or os.environ.get('EDITOR')
+            or ('notepad' if os.name == 'nt' else 'vi'))
+
+def _run_editor(path):
+    """Opens path in $VISUAL / $EDITOR and returns the editor's exit code."""
+    editor = _editor_command()
+    if os.name == 'nt':
+        # The shell resolves .cmd/.bat launchers such as `code --wait`.
+        return subprocess.call(f'{editor} "{path}"', shell=True)
+    return subprocess.call(shlex.split(editor) + [path])
+
+def _confirm(prompt):
+    if not sys.stdin.isatty():
+        return False
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    return sys.stdin.readline().strip().lower() in ('', 'y', 'yes')
+
+def _plaintext_tempfile(suffix):
+    """A 0600 temp file for decrypted content, in RAM-backed /dev/shm when available."""
+    directory = '/dev/shm' if os.path.isdir('/dev/shm') and os.access('/dev/shm', os.W_OK) else None
+    return tempfile.mkstemp(prefix='keylocker-', suffix=suffix, dir=directory)
 
 # --- CLI Manager ---
 
@@ -557,6 +640,64 @@ class Manager(object):
         print(yaml.dump(data, Dumper=yaml.SafeDumper, default_flow_style=False,
                         sort_keys=False, allow_unicode=True), end='')
 
+    def edit(self, yaml_file):
+        """
+        Decrypts a YAML file into a temporary copy, opens $VISUAL / $EDITOR on it and
+        encrypts the result back. Unchanged secrets keep their tokens; new `!SEC plaintext`
+        values are encrypted. The decrypted copy is deleted afterwards.
+        """
+        if not self._check_key_available():
+            sys.exit(1)
+        fernet = _load_fernet(self.key_file)
+        try:
+            text = _read_text(yaml_file)
+            plaintext, known = _decrypt_for_edit(text, fernet, yaml_file)
+        except KeylockerError as e:
+            logger.error("%s", e)
+            sys.exit(1)
+
+        fd, tmp_path = _plaintext_tempfile(os.path.splitext(yaml_file)[1] or '.yaml')
+        try:
+            try:
+                _write_all(fd, plaintext.encode('utf-8'))
+            finally:
+                os.close(fd)
+            while True:
+                try:
+                    code = _run_editor(tmp_path)
+                except OSError as e:
+                    logger.error("Could not start editor '%s': %s", _editor_command(), e)
+                    sys.exit(1)
+                if code != 0:
+                    logger.error("Editor exited with code %s; '%s' left unchanged.", code, yaml_file)
+                    sys.exit(1)
+                try:
+                    with open(tmp_path, 'rb') as f:
+                        edited = f.read().decode('utf-8').lstrip('\ufeff')
+                    if '\r\n' not in plaintext:
+                        edited = edited.replace('\r\n', '\n')
+                    if edited == plaintext:
+                        logger.info("No changes; '%s' left unchanged.", yaml_file)
+                        return
+                    result = _encrypt_after_edit(edited, fernet, known, yaml_file)
+                    break
+                except (KeylockerError, UnicodeDecodeError, OSError) as e:
+                    logger.error("%s", e)
+                    if not _confirm("Re-open the editor to fix it? [Y/n] "):
+                        logger.error("'%s' left unchanged.", yaml_file)
+                        sys.exit(1)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp_path)
+
+        try:
+            _atomic_replace(yaml_file, result.encode('utf-8'),
+                            mode=os.stat(yaml_file).st_mode & 0o7777)
+        except OSError as e:
+            logger.error("Could not write '%s': %s", yaml_file, e)
+            sys.exit(1)
+        logger.info("Saved '%s'.", yaml_file)
+
     def rotate(self, *yaml_files):
         """Re-encrypts every !SEC value in the given YAML files with the primary key."""
         if not self._check_key_available():
@@ -610,6 +751,10 @@ def _build_parser():
     view.add_argument('--strict', action='store_true',
                       help="fail if a !ENV variable without a default is not set")
 
+    edit = commands.add_parser('edit', parents=[common],
+                               help="decrypt a YAML file into $VISUAL/$EDITOR and re-encrypt on save")
+    edit.add_argument('yaml_file')
+
     rotate = commands.add_parser('rotate', parents=[common],
                                  help="re-encrypt !SEC values with the primary key, in place")
     rotate.add_argument('yaml_files', nargs='+', metavar='yaml_file')
@@ -636,6 +781,8 @@ def main(argv=None):
             manager.encrypt(args.value)
         elif args.command == 'view':
             manager.view(args.yaml_file, strict=args.strict)
+        elif args.command == 'edit':
+            manager.edit(args.yaml_file)
         else:
             manager.rotate(*args.yaml_files)
     finally:
