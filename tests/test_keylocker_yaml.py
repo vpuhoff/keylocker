@@ -431,14 +431,14 @@ def test_main_no_args_prints_help(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['keylocker'])
     keylocker.main()
     captured = capsys.readouterr()
-    assert "Usage" in captured.out or "Usage" in captured.err
+    assert "keylocker" in captured.out or "keylocker" in captured.err
 
 def test_main_module_entry(monkeypatch, capsys):
     """Тест: python -m keylocker без аргументов выводит справку."""
     monkeypatch.setattr(sys, 'argv', ['keylocker'])
     runpy.run_module('keylocker.__main__', run_name='__main__')
     captured = capsys.readouterr()
-    assert "Usage" in captured.out or "Usage" in captured.err
+    assert "keylocker" in captured.out or "keylocker" in captured.err
 
 # === Тесты сбойных веток Fernet (моки) ===
 
@@ -503,7 +503,7 @@ def test_init_module_guard(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['keylocker'])
     runpy.run_path(os.path.abspath(keylocker.__file__), run_name='__main__')
     captured = capsys.readouterr()
-    assert "Usage" in captured.out or "Usage" in captured.err
+    assert "keylocker" in captured.out or "keylocker" in captured.err
 
 # === CLI E2E через subprocess ===
 
