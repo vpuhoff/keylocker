@@ -3,18 +3,30 @@
 import pytest
 import os
 import yaml
-import subprocess # Для тестирования CLI вызовов (альтернатива)
+# Импортируем необходимые части из обновленного keylocker
+import sys
+import builtins
+import subprocess
+import runpy
+
 from cryptography.fernet import Fernet
 
-# Импортируем необходимые части из обновленного keylocker
+import keylocker
 from keylocker import (
     Manager,
     load_yaml_secrets,
     encrypt_string_value,
+    _load_fernet_key,
+    keylocker_loader,
+    keylocker_dumper,
+    SecureString,
+    EnvVariable,
     # Вспомогательные переменные или функции, если они доступны и нужны
     DEFAULT_KEY_FILE,
     ENV_VAR_NAME # Имя переменной окружения с ключом
 )
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(keylocker.__file__)))
 
 # --- Fixtures ---
 
@@ -49,6 +61,11 @@ def set_env_key(monkeypatch, valid_fernet_key):
     # Возвращаем сам ключ для возможного использования в тесте
     yield valid_fernet_key
     # Очистка происходит автоматически благодаря monkeypatch
+
+@pytest.fixture(scope="function")
+def set_env_key_invalid(monkeypatch):
+    """Фикстура для установки переменной окружения с НЕвалидным ключом."""
+    monkeypatch.setenv(ENV_VAR_NAME, "not-a-valid-fernet-key")
 
 @pytest.fixture(scope="function")
 def unset_env_key(monkeypatch):
@@ -212,37 +229,307 @@ def test_load_yaml_env_not_set(yaml_file_factory, generated_key_file, unset_env_
     assert f"Environment variable '{env_var}' (tagged !ENV) not found" in captured.out or \
            f"Environment variable '{env_var}' (tagged !ENV) not found" in captured.err
 
-# === Тесты CLI команд (требуют больше усилий для настройки) ===
+# === Тесты ошибок загрузки ключа (_load_fernet_key) ===
 
-# Пример теста команды view через subprocess
-@pytest.mark.skip(reason="CLI tests require careful environment setup")
-def test_cli_view_with_file_key(yaml_file_factory, generated_key_file, unset_env_key, monkeypatch):
-    """(Пример) Тестирование CLI команды 'view' с ключом из файла."""
-    secret_value = "cli_secret"
-    env_var = "CLI_TEST_VAR"
-    env_val = "cli_env_val"
+def test_load_fernet_key_invalid_env_key(set_env_key_invalid, capsys):
+    """Тест: невалидный ключ в переменной окружения -> None + ошибка."""
+    result = _load_fernet_key("nonexistent.key")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Invalid key format found in environment variable" in captured.out
+
+def test_load_fernet_key_invalid_file_key(key_file_in_temp_dir, unset_env_key, capsys):
+    """Тест: невалидное содержимое файла ключа -> None + ошибка."""
+    key_file_in_temp_dir.write_text("not-a-valid-fernet-key")
+    result = _load_fernet_key(str(key_file_in_temp_dir))
+    assert result is None
+    captured = capsys.readouterr()
+    assert f"Invalid key format in file '{key_file_in_temp_dir}'" in captured.out
+
+def test_load_fernet_key_unreadable_file(temp_dir, unset_env_key, capsys):
+    """Тест: путь ключа указывает на директорию -> IOError -> None + ошибка."""
+    result = _load_fernet_key(str(temp_dir))
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Could not read key file" in captured.out
+
+def test_load_fernet_key_unexpected_read_error(temp_dir, unset_env_key, monkeypatch, capsys):
+    """Тест: непредвиденная ошибка при чтении файла ключа -> None + ошибка."""
+    key_path = temp_dir / "weird.key"
+    key_path.write_bytes(Fernet.generate_key())
+    real_open = builtins.open
+    def failing_open(file, *args, **kwargs):
+        if str(file) == str(key_path):
+            raise RuntimeError("boom")
+        return real_open(file, *args, **kwargs)
+    monkeypatch.setattr(builtins, 'open', failing_open)
+    result = _load_fernet_key(str(key_path))
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Unexpected error reading key file" in captured.out
+
+def test_load_fernet_key_env_unexpected_error(monkeypatch, capsys):
+    """Тест: непредвиденная ошибка валидации ключа из env -> None + ошибка."""
+    monkeypatch.setenv(ENV_VAR_NAME, Fernet.generate_key().decode())
+    monkeypatch.setattr(keylocker, 'Fernet', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = _load_fernet_key("nonexistent.key")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Unexpected error validating key from env var" in captured.out
+
+# === Тесты граничных случаев загрузки YAML ===
+
+def test_load_yaml_file_not_found(unset_env_key, capsys):
+    """Тест: несуществующий YAML файл -> None + ошибка."""
+    result = load_yaml_secrets("no_such_file.yaml")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "not found" in captured.out
+
+def test_load_yaml_invalid_yaml(yaml_file_factory, unset_env_key, capsys):
+    """Тест: синтаксически невалидный YAML -> None + ошибка."""
+    yaml_path = yaml_file_factory("broken.yaml", "key: [unclosed")
+    result = load_yaml_secrets(yaml_path)
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Failed to parse YAML file" in captured.out
+
+def test_load_yaml_unexpected_error(temp_dir, unset_env_key, capsys):
+    """Тест: неожиданная ошибка при загрузке (путь - директория) -> None + ошибка."""
+    result = load_yaml_secrets(str(temp_dir))
+    assert result is None
+    captured = capsys.readouterr()
+    assert "unexpected error occurred during YAML load" in captured.out
+
+def test_load_yaml_invalid_sec_token(yaml_file_factory, generated_key_file, unset_env_key, capsys):
+    """Тест: !SEC зашифрован другим ключом -> DECRYPTION_ERROR[InvalidToken]."""
+    other_key = Fernet.generate_key()
+    other_fernet = Fernet(other_key)
+    encrypted_val = other_fernet.encrypt(b"other-key-secret").decode()
+    yaml_content = f"secret: !SEC {encrypted_val}"
+    yaml_path = yaml_file_factory("mismatched_key.yaml", yaml_content)
+
+    loaded_data = load_yaml_secrets(yaml_path, generated_key_file)
+    assert loaded_data is not None
+    assert loaded_data['secret'].startswith("DECRYPTION_ERROR[InvalidToken]")
+    captured = capsys.readouterr()
+    assert "Invalid token or key mismatch" in captured.out
+
+# === Тесты дампера (keylocker_dumper) ===
+
+def test_dumper_no_key(key_file_in_temp_dir, unset_env_key, capsys):
+    """Тест: дамп SecureString без ключа -> ENCRYPTION_ERROR[NoKey]."""
+    assert not key_file_in_temp_dir.exists()
+    dumper = keylocker_dumper(str(key_file_in_temp_dir))
+    output = yaml.dump({'secret': SecureString("sensitive")}, Dumper=dumper)
+    assert "ENCRYPTION_ERROR[NoKey]: sensitive" in output
+    captured = capsys.readouterr()
+    assert "Cannot encrypt values for !SEC tags" in captured.out
+
+def test_dumper_roundtrip(yaml_file_factory, generated_key_file, unset_env_key, monkeypatch):
+    """Тест: дамп !SEC/!ENV и обратная загрузка через loader."""
+    env_var = "DUMPER_TEST_VAR"
+    env_val = "dumper_env_val"
+    monkeypatch.setenv(env_var, env_val)
+
+    data = {
+        'password': SecureString("roundtrip_secret"),
+        'api_key': EnvVariable(env_var),
+    }
+    dumped = yaml.dump(data, Dumper=keylocker_dumper(generated_key_file))
+    assert '!SEC ' in dumped
+    assert '!ENV' in dumped and env_var in dumped
+
+    yaml_path = yaml_file_factory("roundtrip.yaml", dumped)
+    loaded = load_yaml_secrets(yaml_path, generated_key_file)
+    assert loaded['password'] == "roundtrip_secret"
+    assert loaded['api_key'] == env_val
+
+# === Тесты CLI Manager ===
+
+def test_manager_encrypt_no_key_exits(key_file_in_temp_dir, unset_env_key):
+    """Тест: encrypt без ключа -> sys.exit(1)."""
+    assert not key_file_in_temp_dir.exists()
+    manager = Manager(key_file=str(key_file_in_temp_dir))
+    with pytest.raises(SystemExit) as excinfo:
+        manager.encrypt("secret")
+    assert excinfo.value.code == 1
+
+def test_manager_encrypt_success(generated_key_file, unset_env_key, capsys):
+    """Тест: encrypt с валидным ключом печатает !SEC тег."""
+    manager = Manager(key_file=generated_key_file)
+    manager.encrypt("cli_secret")
+    captured = capsys.readouterr()
+    assert "Add the following line to your YAML file:" in captured.out
+    assert "!SEC " in captured.out
+
+def test_manager_encrypt_failure_exits(generated_key_file, unset_env_key, monkeypatch):
+    """Тест: encrypt при ошибке шифрования -> sys.exit(1)."""
+    monkeypatch.setattr(keylocker, 'encrypt_string_value', lambda v, kf=None: None)
+    manager = Manager(key_file=generated_key_file)
+    with pytest.raises(SystemExit) as excinfo:
+        manager.encrypt("secret")
+    assert excinfo.value.code == 1
+
+def test_manager_view_success(yaml_file_factory, generated_key_file, unset_env_key, monkeypatch, capsys):
+    """Тест: view печатает расшифрованный YAML."""
+    secret_value = "view_secret"
+    env_var = "VIEW_TEST_VAR"
+    env_val = "view_env_val"
     monkeypatch.setenv(env_var, env_val)
     encrypted_tag = encrypt_string_value(secret_value, generated_key_file)
-    yaml_content = f"password: {encrypted_tag}\napi_key: !ENV {env_var}"
-    yaml_path = yaml_file_factory("cli_config.yaml", yaml_content)
+    yaml_path = yaml_file_factory("view_config.yaml", f"password: {encrypted_tag}\napi_key: !ENV {env_var}")
 
-    # Запускаем keylocker как подпроцесс
-    # Важно: нужно убедиться, что keylocker установлен в окружении или путь к скрипту правильный
-    result = subprocess.run(
-        ['keylocker', 'view', yaml_path, '--key-file', generated_key_file], # Нужно добавить поддержку --key-file в CLI
-        capture_output=True, text=True, check=True,
-        # Передаем окружение, чтобы !ENV сработало
-        env={**os.environ, ENV_VAR_NAME: ''} # Гарантируем, что env ключ не установлен
+    manager = Manager(key_file=generated_key_file)
+    manager.view(yaml_path)
+    captured = capsys.readouterr()
+    assert secret_value in captured.out
+    assert env_val in captured.out
+    assert "!SEC" not in captured.out
+
+def test_manager_view_failure_exits(generated_key_file, unset_env_key):
+    """Тест: view несуществующего файла -> sys.exit(1)."""
+    manager = Manager(key_file=generated_key_file)
+    with pytest.raises(SystemExit) as excinfo:
+        manager.view("no_such_config.yaml")
+    assert excinfo.value.code == 1
+
+def test_manager_init_write_error(temp_dir, unset_env_key):
+    """Тест: init в несуществующую директорию -> sys.exit(996)."""
+    bad_path = temp_dir / "no_such_dir" / "storage.key"
+    manager = Manager(key_file=str(bad_path))
+    with pytest.raises(SystemExit) as excinfo:
+        manager.init()
+    assert excinfo.value.code == 996
+
+def test_manager_init_existing_with_env_key(generated_key_file, monkeypatch, capsys):
+    """Тест: init при существующем файле и установленной env-переменной -> подсказка о приоритете."""
+    monkeypatch.setenv(ENV_VAR_NAME, Fernet.generate_key().decode())
+    manager = Manager(key_file=generated_key_file)
+    initial_content = open(generated_key_file, 'rb').read()
+    result = manager.init()
+    assert "already exists" in result
+    assert open(generated_key_file, 'rb').read() == initial_content
+    captured = capsys.readouterr()
+    assert "will take precedence" in captured.out
+
+def test_manager_init_force_with_env_key(generated_key_file, monkeypatch, capsys):
+    """Тест: init --force с установленной env-переменной -> файл перезаписан + подсказка."""
+    monkeypatch.setenv(ENV_VAR_NAME, Fernet.generate_key().decode())
+    manager = Manager(key_file=generated_key_file)
+    initial_content = open(generated_key_file, 'rb').read()
+    result = manager.init(force=True)
+    assert "created." in result
+    assert open(generated_key_file, 'rb').read() != initial_content
+    captured = capsys.readouterr()
+    assert "will take precedence" in captured.out
+
+# === Тесты точки входа ===
+
+def test_main_no_args_prints_help(monkeypatch, capsys):
+    """Тест: main() без аргументов выводит справку и не падает."""
+    monkeypatch.setattr(sys, 'argv', ['keylocker'])
+    keylocker.main()
+    captured = capsys.readouterr()
+    assert "keylocker" in captured.out or "keylocker" in captured.err
+
+def test_main_module_entry(monkeypatch, capsys):
+    """Тест: python -m keylocker без аргументов выводит справку."""
+    monkeypatch.setattr(sys, 'argv', ['keylocker'])
+    runpy.run_module('keylocker.__main__', run_name='__main__')
+    captured = capsys.readouterr()
+    assert "keylocker" in captured.out or "keylocker" in captured.err
+
+# === Тесты сбойных веток Fernet (моки) ===
+
+class _FlakyFernet:
+    """Мок Fernet: конструктор валиден, но encrypt/decrypt падают."""
+    def __init__(self, *args, **kwargs):
+        pass
+    def decrypt(self, data):
+        raise RuntimeError("decrypt boom")
+    def encrypt(self, data):
+        raise RuntimeError("encrypt boom")
+
+def test_loader_unexpected_decrypt_error(yaml_file_factory, set_env_key, monkeypatch, capsys):
+    """Тест: непредвиденная ошибка при расшифровке !SEC -> DECRYPTION_ERROR[RuntimeError]."""
+    monkeypatch.setattr(keylocker, 'Fernet', _FlakyFernet)
+    yaml_path = yaml_file_factory("flaky.yaml", "secret: !SEC gAAAAABommitted")
+    loaded = load_yaml_secrets(yaml_path, "nonexistent.key")
+    assert loaded is not None
+    assert loaded['secret'] == "DECRYPTION_ERROR[RuntimeError]"
+    captured = capsys.readouterr()
+    assert "Unexpected error during !SEC decryption" in captured.out
+
+def test_loader_fernet_init_failure(yaml_file_factory, monkeypatch, capsys):
+    """Тест: битый ключ от _load_fernet_key -> Fernet init падает в loader."""
+    monkeypatch.setattr(keylocker, '_load_fernet_key', lambda kf: b'not-a-fernet-key')
+    Loader = keylocker_loader('nonexistent.key')
+    captured = capsys.readouterr()
+    assert "Failed to initialize Fernet with the loaded key" in captured.out
+
+def test_dumper_fernet_init_failure(monkeypatch, capsys):
+    """Тест: битый ключ от _load_fernet_key -> Fernet init падает в dumper."""
+    monkeypatch.setattr(keylocker, '_load_fernet_key', lambda kf: b'not-a-fernet-key')
+    dumper = keylocker_dumper('nonexistent.key')
+    captured = capsys.readouterr()
+    assert "Failed to initialize Fernet with the loaded key" in captured.out
+
+def test_dumper_encrypt_failure(yaml_file_factory, set_env_key, monkeypatch):
+    """Тест: сбой encrypt в representer -> ENCRYPTION_ERROR[RuntimeError]."""
+    monkeypatch.setattr(keylocker, 'Fernet', _FlakyFernet)
+    dumper = keylocker_dumper('nonexistent.key')
+    output = yaml.dump({'secret': SecureString("sensitive")}, Dumper=dumper)
+    assert "ENCRYPTION_ERROR[RuntimeError]: sensitive" in output
+
+def test_encrypt_string_value_unexpected_error(set_env_key, monkeypatch, capsys):
+    """Тест: непредвиденная ошибка при шифровании -> None + ошибка."""
+    monkeypatch.setattr(keylocker, 'Fernet', _FlakyFernet)
+    result = encrypt_string_value("data", "nonexistent.key")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "An unexpected error occurred during encryption" in captured.out
+
+def test_load_fernet_key_file_vanishes(key_file_in_temp_dir, unset_env_key, monkeypatch, capsys):
+    """Тест: файл ключа исчез между проверкой exists и open -> None + ошибка."""
+    monkeypatch.setattr(os.path, 'exists', lambda p: True)
+    result = _load_fernet_key(str(key_file_in_temp_dir))
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Key file" in captured.out and "not found" in captured.out
+
+def test_init_module_guard(monkeypatch, capsys):
+    """Тест: guard-строка if __name__ == '__main__' в __init__.py."""
+    monkeypatch.setattr(sys, 'argv', ['keylocker'])
+    runpy.run_path(os.path.abspath(keylocker.__file__), run_name='__main__')
+    captured = capsys.readouterr()
+    assert "keylocker" in captured.out or "keylocker" in captured.err
+
+# === CLI E2E через subprocess ===
+
+def _run_cli(args, cwd):
+    env = {k: v for k, v in os.environ.items() if k != ENV_VAR_NAME}
+    env['PYTHONPATH'] = _REPO_ROOT
+    return subprocess.run(
+        [sys.executable, '-m', 'keylocker'] + args,
+        capture_output=True, text=True, cwd=str(cwd), env=env
     )
 
-    assert secret_value in result.stdout
-    assert env_val in result.stdout
-    assert '!SEC' not in result.stdout
-    assert '!ENV' not in result.stdout
+def test_cli_init_encrypt_view(tmp_path):
+    """E2E: init -> encrypt -> view через python -m keylocker."""
+    result = _run_cli(['init'], tmp_path)
+    assert result.returncode == 0, result.stderr
+    key_file = tmp_path / DEFAULT_KEY_FILE
+    assert key_file.exists()
+    Fernet(key_file.read_bytes())  # ключ валиден
 
-# Добавить аналогичный тест для CLI view с ключом из переменной окружения
+    result = _run_cli(['encrypt', 'e2e_secret'], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "!SEC " in result.stdout
 
-# === Другие тесты ===
-# - Тест сохранения YAML (потребует создания данных с SecureString/EnvVariable)
-# - Тест невалидного ключа в файле / переменной окружения
-# - Тест невалидного токена !SEC
+    encrypted_tag = [l for l in result.stdout.splitlines() if l.startswith('!SEC ')][0]
+    yaml_path = tmp_path / "e2e_config.yaml"
+    yaml_path.write_text(f"password: {encrypted_tag}")
+    result = _run_cli(['view', str(yaml_path)], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "e2e_secret" in result.stdout

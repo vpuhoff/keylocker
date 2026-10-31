@@ -8,24 +8,25 @@ permissions:
 # Триггеры запуска:
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
     tags:
       - 'v*.*.*'
+  # Тесты и сборка запускаются на ЛЮБОМ pull request (без фильтра по веткам),
+  # чтобы каждый PR проверялся перед вливанием
   pull_request:
-    branches: [ master, main ]
 
 jobs:
   # Задача для сборки и тестирования
   build_and_test:
     name: Build & Test (Python 3.10)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Set up Python 3.10
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.15'
 
@@ -34,7 +35,7 @@ jobs:
 
     # Кэширование Pipenv окружения для ускорения
     - name: Cache Pipenv virtualenv
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.local/share/virtualenvs # Стандартный путь Pipenv для virtualenv
         key: ${{ runner.os }}-pipenv-${{ hashFiles('**/Pipfile.lock') }}
@@ -56,7 +57,7 @@ jobs:
 
     # Загрузка артефактов сборки
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: dist-python-3.10
         path: dist/
@@ -65,7 +66,7 @@ jobs:
   deploy:
     name: Deploy to PyPI
     needs: build_and_test # Зависит от успешной сборки/тестов
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Условие запуска: только если событие - это push тега
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
 
@@ -75,10 +76,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Set up Python 3.10
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.15'
 
@@ -90,7 +91,7 @@ jobs:
 
     # Скачивание артефактов сборки из предыдущей задачи
     - name: Download build artifacts
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v8
       with:
         name: dist-python-3.10 # Имя должно совпадать с upload-artifact
         path: dist/
