@@ -9,5 +9,4 @@ pytest-cov = "*"
 
 [packages]
 cryptography = ">=50.0.2,<51"
-fire = ">=0.7.1,<0.8"
 pyyaml = ">=6.0.3,<7"
