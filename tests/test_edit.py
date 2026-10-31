@@ -336,8 +336,13 @@ def test_decrypt_for_edit_bad_token(key):
 
 # === Editor launching ===
 
+@pytest.mark.parametrize("windows, default", [(True, 'notepad'), (False, 'vi')])
+def test_editor_command_default(monkeypatch, windows, default):
+    monkeypatch.setattr(keylocker, '_WINDOWS', windows)
+    assert keylocker._editor_command() == default
+
+
 def test_editor_command_precedence(monkeypatch):
-    assert keylocker._editor_command() == ('notepad' if os.name == 'nt' else 'vi')
     monkeypatch.setenv('EDITOR', 'nano')
     assert keylocker._editor_command() == 'nano'
     monkeypatch.setenv('VISUAL', 'code --wait')
@@ -352,6 +357,29 @@ def test_run_editor_executes_command_with_arguments(tmp_path, monkeypatch):
     target.write_text("")
     assert keylocker._run_editor(str(target)) == 0
     assert target.read_text() == "edited\n"
+
+
+def _record_call(monkeypatch, code=0):
+    calls = []
+    monkeypatch.setattr(keylocker.subprocess, 'call',
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or code)
+    return calls
+
+
+def test_run_editor_windows_uses_shell(monkeypatch):
+    monkeypatch.setattr(keylocker, '_WINDOWS', True)
+    monkeypatch.setenv('EDITOR', 'code --wait')
+    calls = _record_call(monkeypatch, code=5)
+    assert keylocker._run_editor(r'C:\Temp dir\keylocker-1.yaml') == 5
+    assert calls == [(('code --wait "C:\\Temp dir\\keylocker-1.yaml"',), {'shell': True})]
+
+
+def test_run_editor_posix_splits_command(monkeypatch):
+    monkeypatch.setattr(keylocker, '_WINDOWS', False)
+    monkeypatch.setenv('EDITOR', "'/opt/my editor/bin/ed' --wait -n")
+    calls = _record_call(monkeypatch)
+    assert keylocker._run_editor('/dev/shm/keylocker 1.yaml') == 0
+    assert calls == [((['/opt/my editor/bin/ed', '--wait', '-n', '/dev/shm/keylocker 1.yaml'],), {})]
 
 
 def test_confirm(monkeypatch, capsys):

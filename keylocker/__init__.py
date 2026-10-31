@@ -23,6 +23,7 @@ KEY_FILE_ENV_VAR = 'KEYLOCKER_KEY_FILE' # Environment variable for the key file 
 KEY_FILE_MODE = 0o600
 KEY_DIR_MODE = 0o700
 ENV_DEFAULT_SEPARATOR = ':-' # !ENV NAME:-default
+_WINDOWS = os.name == 'nt'
 
 logger = logging.getLogger('keylocker')
 
@@ -500,12 +501,12 @@ def _read_secret_interactively():
 
 def _editor_command():
     return (os.environ.get('VISUAL') or os.environ.get('EDITOR')
-            or ('notepad' if os.name == 'nt' else 'vi'))
+            or ('notepad' if _WINDOWS else 'vi'))
 
 def _run_editor(path):
     """Opens path in $VISUAL / $EDITOR and returns the editor's exit code."""
     editor = _editor_command()
-    if os.name == 'nt':
+    if _WINDOWS:
         # The shell resolves .cmd/.bat launchers such as `code --wait`.
         return subprocess.call(f'{editor} "{path}"', shell=True)
     return subprocess.call(shlex.split(editor) + [path])
