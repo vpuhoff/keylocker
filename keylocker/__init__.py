@@ -2,17 +2,33 @@
 
 import os
 import sys
-import base64
-import yaml # Added
+import getpass
+import tempfile
+import yaml
 import fire
 from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # --- Configuration ---
 DEFAULT_KEY_FILE = 'storage.key'
 ENV_VAR_NAME = 'KEYLOCKER_SECRET_KEY' # Environment variable for the key
+KEY_FILE_MODE = 0o600
+
+# --- Exceptions ---
+
+class KeylockerError(Exception):
+    """Base class for keylocker errors."""
+
+class EncryptionError(KeylockerError):
+    """A value could not be encrypted. Never carries the plaintext."""
+
+class DecryptionError(KeylockerError):
+    """A !SEC value could not be decrypted."""
+
+# --- Diagnostics ---
+
+def _log(message):
+    """Diagnostics go to stderr so stdout stays clean for data (YAML, !SEC tags)."""
+    print(message, file=sys.stderr)
 
 # --- Helper Function for Key Loading ---
 
@@ -24,7 +40,7 @@ def _load_fernet_key(key_file=DEFAULT_KEY_FILE):
     key_from_env = os.environ.get(ENV_VAR_NAME)
 
     if key_from_env:
-        print(f"INFO: Using encryption key from environment variable {ENV_VAR_NAME}.")
+        _log(f"INFO: Using encryption key from environment variable {ENV_VAR_NAME}.")
         try:
             # Assume the key in the env var is the correct base64 encoded string
             key_bytes = key_from_env.encode('utf-8')
@@ -32,20 +48,16 @@ def _load_fernet_key(key_file=DEFAULT_KEY_FILE):
             Fernet(key_bytes)
             return key_bytes
         except (InvalidToken, ValueError, TypeError):
-             print(f"ERROR: Invalid key format found in environment variable {ENV_VAR_NAME}.")
+             _log(f"ERROR: Invalid key format found in environment variable {ENV_VAR_NAME}.")
              return None
         except Exception as e:
-             print(f"ERROR: Unexpected error validating key from env var {ENV_VAR_NAME}: {e}")
+             _log(f"ERROR: Unexpected error validating key from env var {ENV_VAR_NAME}: {e}")
              return None
 
     else:
-        # Environment variable not set, try the key file
-        # Suppress message if key file is the default and doesn't exist during certain operations
-        # print(f"INFO: Environment variable {ENV_VAR_NAME} not set. Trying key file '{key_file}'.")
         if not os.path.exists(key_file):
             # It's okay if the file doesn't exist initially for 'init' command,
             # but other commands will fail later if no key is found.
-            # Errors will be handled by the calling functions if no key is ultimately loaded.
             return None # Indicate no key found *from file*
         try:
             with open(key_file, 'rb') as kf:
@@ -55,17 +67,28 @@ def _load_fernet_key(key_file=DEFAULT_KEY_FILE):
             return key_bytes
         except FileNotFoundError:
              # Should not happen due to os.path.exists check, but included for safety
-             print(f"ERROR: Key file '{key_file}' not found.")
+             _log(f"ERROR: Key file '{key_file}' not found.")
              return None
         except (InvalidToken, ValueError, TypeError):
-             print(f"ERROR: Invalid key format in file '{key_file}'.")
+             _log(f"ERROR: Invalid key format in file '{key_file}'.")
              return None
         except IOError as e:
-            print(f"ERROR: Could not read key file '{key_file}': {e}")
+            _log(f"ERROR: Could not read key file '{key_file}': {e}")
             return None
         except Exception as e:
-             print(f"ERROR: Unexpected error reading key file '{key_file}': {e}")
+             _log(f"ERROR: Unexpected error reading key file '{key_file}': {e}")
              return None
+
+def _load_fernet(key_file):
+    """Returns a Fernet instance for the available key, or None."""
+    key_bytes = _load_fernet_key(key_file)
+    if not key_bytes:
+        return None
+    try:
+        return Fernet(key_bytes)
+    except Exception as e:
+        _log(f"ERROR: Failed to initialize Fernet with the loaded key: {e}")
+        return None
 
 # --- YAML Tag Handling ---
 
@@ -79,45 +102,41 @@ class EnvVariable(str):
 
 # Loader: Decrypt !SEC tags, Resolve !ENV tags
 def keylocker_loader(key_file=DEFAULT_KEY_FILE):
-    """Creates a YAML Loader that handles !SEC and !ENV tags."""
-    key_bytes = _load_fernet_key(key_file)
-    if not key_bytes:
-        # Error message is handled by _load_fernet_key or subsequent checks
-        # We need to proceed to allow yaml.load to potentially fail gracefully
-        # or let the calling function handle the None key case.
-        # Returning None here would prevent loading YAML even with no secrets.
-        print("WARNING: No encryption key loaded. !SEC tags cannot be decrypted.")
-        fernet = None # Set fernet to None if no key
-    else:
-        try:
-            fernet = Fernet(key_bytes)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize Fernet with the loaded key: {e}")
-            fernet = None # Treat as no key if init fails
+    """
+    Creates a YAML Loader that handles !SEC and !ENV tags.
+    A !SEC value that cannot be decrypted raises DecryptionError.
+    """
+    fernet = _load_fernet(key_file)
+    if fernet is None:
+        _log("WARNING: No encryption key loaded. !SEC tags cannot be decrypted.")
 
     class KeylockerLoader(yaml.SafeLoader):
         pass
 
     def sec_constructor(loader, node):
         value = loader.construct_scalar(node)
+        # str(node.start_mark) embeds a snippet of the source YAML, which may hold other secrets.
+        position = f"line {node.start_mark.line + 1}, column {node.start_mark.column + 1}"
         if fernet is None:
-            print(f"ERROR: Cannot decrypt !SEC value as no valid key is loaded.")
-            return f"DECRYPTION_ERROR[NoKey]"
+            raise DecryptionError(
+                f"Cannot decrypt !SEC value at {position}: no valid key is loaded."
+            )
         try:
-            decrypted_value = fernet.decrypt(value.encode()).decode()
-            return decrypted_value
+            return fernet.decrypt(value.encode()).decode()
         except InvalidToken:
-            print(f"ERROR: Failed to decrypt value tagged !SEC. Invalid token or key mismatch.")
-            return f"DECRYPTION_ERROR[InvalidToken]"
+            raise DecryptionError(
+                f"Failed to decrypt !SEC value at {position}: invalid token or key mismatch."
+            ) from None
         except Exception as e:
-            print(f"ERROR: Unexpected error during !SEC decryption: {e}")
-            return f"DECRYPTION_ERROR[{type(e).__name__}]"
+            raise DecryptionError(
+                f"Unexpected error during !SEC decryption at {position}: {type(e).__name__}"
+            ) from None
 
     def env_constructor(loader, node):
         var_name = loader.construct_scalar(node)
         value = os.environ.get(var_name)
         if value is None:
-            print(f"WARNING: Environment variable '{var_name}' (tagged !ENV) not found. Returning None.")
+            _log(f"WARNING: Environment variable '{var_name}' (tagged !ENV) not found. Returning None.")
         return value # Return the raw value from env or None
 
     KeylockerLoader.add_constructor('!SEC', sec_constructor)
@@ -126,39 +145,30 @@ def keylocker_loader(key_file=DEFAULT_KEY_FILE):
 
 # Dumper: Encrypt SecureString, Format EnvVariable
 def keylocker_dumper(key_file=DEFAULT_KEY_FILE):
-    """Creates a YAML Dumper that handles SecureString and EnvVariable."""
-    key_bytes = _load_fernet_key(key_file)
-    if not key_bytes:
-        print("WARNING: No encryption key loaded. Cannot encrypt values for !SEC tags.")
-        fernet = None
-    else:
-        try:
-            fernet = Fernet(key_bytes)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize Fernet with the loaded key: {e}")
-            fernet = None
+    """
+    Creates a YAML Dumper that handles SecureString and EnvVariable.
+    A SecureString that cannot be encrypted raises EncryptionError; it is
+    never written out in plaintext.
+    """
+    fernet = _load_fernet(key_file)
+    if fernet is None:
+        _log("WARNING: No encryption key loaded. Cannot encrypt values for !SEC tags.")
 
     class KeylockerDumper(yaml.SafeDumper):
         pass
 
     def sec_representer(dumper, data):
-         if fernet is None:
-             print("ERROR: Cannot represent SecureString as !SEC: No valid key loaded.")
-             # Represent as plain string with a warning prefix maybe?
-             return dumper.represent_scalar('tag:yaml.org,2002:str', f"ENCRYPTION_ERROR[NoKey]: {data}")
-         try:
+        if fernet is None:
+            raise EncryptionError("Cannot represent SecureString as !SEC: no valid key is loaded.")
+        try:
             encrypted_value = fernet.encrypt(str(data).encode()).decode()
-            # Use style='|' for literal block scalar automatically if multiline,
-            # otherwise default (usually plain scalar)
-            style = '|' if '\n' in encrypted_value else None
-            return dumper.represent_scalar('!SEC', encrypted_value, style=style)
-         except Exception as e:
-            print(f"ERROR: Failed to encrypt SecureString: {e}")
-            return dumper.represent_scalar('tag:yaml.org,2002:str', f"ENCRYPTION_ERROR[{type(e).__name__}]: {data}")
-
+        except Exception as e:
+            raise EncryptionError(f"Failed to encrypt SecureString: {type(e).__name__}") from None
+        style = '|' if '\n' in encrypted_value else None
+        return dumper.represent_scalar('!SEC', encrypted_value, style=style)
 
     def env_representer(dumper, data):
-         return dumper.represent_scalar('!ENV', str(data))
+        return dumper.represent_scalar('!ENV', str(data))
 
     KeylockerDumper.add_representer(SecureString, sec_representer)
     KeylockerDumper.add_representer(EnvVariable, env_representer)
@@ -167,27 +177,31 @@ def keylocker_dumper(key_file=DEFAULT_KEY_FILE):
 # --- Core Functions ---
 
 def load_yaml_secrets(file_path, key_file=DEFAULT_KEY_FILE):
-    """Loads YAML, decrypting !SEC and resolving !ENV."""
+    """
+    Loads YAML, decrypting !SEC and resolving !ENV.
+    Returns None if the file is missing or not valid YAML.
+    Raises DecryptionError if any !SEC value cannot be decrypted.
+    """
     try:
         with open(file_path, 'r') as f:
-            # Pass the custom loader initialized with the key file path (for fallback)
-            data = yaml.load(f, Loader=keylocker_loader(key_file))
-        return data
+            return yaml.load(f, Loader=keylocker_loader(key_file))
+    except KeylockerError:
+        raise
     except FileNotFoundError:
-        print(f"ERROR: Input YAML file '{file_path}' not found.")
+        _log(f"ERROR: Input YAML file '{file_path}' not found.")
         return None
     except yaml.YAMLError as e:
-        print(f"ERROR: Failed to parse YAML file '{file_path}': {e}")
+        _log(f"ERROR: Failed to parse YAML file '{file_path}': {e}")
         return None
     except Exception as e:
-        print(f"ERROR: An unexpected error occurred during YAML load: {e}")
+        _log(f"ERROR: An unexpected error occurred during YAML load: {e}")
         return None
 
 def encrypt_string_value(value_to_encrypt, key_file=DEFAULT_KEY_FILE):
     """Encrypts a string and returns the !SEC tagged value."""
     key_bytes = _load_fernet_key(key_file)
     if not key_bytes:
-        print("ERROR: Failed to load a valid encryption key for encryption.")
+        _log("ERROR: Failed to load a valid encryption key for encryption.")
         return None # Indicate failure
     try:
         fernet = Fernet(key_bytes)
@@ -195,8 +209,62 @@ def encrypt_string_value(value_to_encrypt, key_file=DEFAULT_KEY_FILE):
         # Return the full tag representation ready for YAML
         return f"!SEC {encrypted}"
     except Exception as e:
-         print(f"ERROR: An unexpected error occurred during encryption: {e}")
+         _log(f"ERROR: An unexpected error occurred during encryption: {type(e).__name__}")
          return None
+
+def _write_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+    os.fsync(fd)
+
+def _write_key_file(key_path, key, overwrite=False):
+    """
+    Writes the key readable by the owner only (0600 on POSIX), never following symlinks.
+    Without overwrite, raises FileExistsError if anything (even a dangling symlink) is at key_path.
+    With overwrite, the key is written to a private temp file and atomically renamed over
+    key_path, which replaces a symlink itself rather than writing through it.
+    """
+    if not overwrite:
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
+        fd = os.open(key_path, flags, KEY_FILE_MODE)
+        try:
+            _write_all(fd, key)
+        except BaseException:
+            os.close(fd)
+            os.unlink(key_path)
+            raise
+        os.close(fd)
+        return
+
+    directory = os.path.dirname(os.path.abspath(key_path))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.keylocker-', suffix='.tmp')
+    try:
+        try:
+            _write_all(fd, key)
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, key_path)
+    except BaseException:
+        if os.path.lexists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+def _read_secret_interactively():
+    """Reads a secret from piped stdin or from a hidden, confirmed prompt."""
+    if not sys.stdin.isatty():
+        value = sys.stdin.read()
+        # Drop only the trailing newline added by `echo` / here-strings.
+        if value.endswith('\n'):
+            value = value[:-1]
+            if value.endswith('\r'):
+                value = value[:-1]
+        return value
+    value = getpass.getpass("Secret to encrypt: ")
+    if getpass.getpass("Repeat secret: ") != value:
+        _log("ERROR: Values do not match.")
+        return None
+    return value
 
 # --- CLI Manager ---
 
@@ -209,49 +277,67 @@ class Manager(object):
          """Checks if an encryption key is available via env var or file."""
          key_bytes = _load_fernet_key(self.key_file)
          if not key_bytes:
-              print(f"ERROR: No valid encryption key found.")
-              print(f"Ensure {ENV_VAR_NAME} environment variable is set,")
-              print(f"or run 'keylocker init' to create '{self.key_file}'.")
+              _log("ERROR: No valid encryption key found.")
+              _log(f"Ensure {ENV_VAR_NAME} environment variable is set,")
+              _log(f"or run 'keylocker init' to create '{self.key_file}'.")
               return False
          return True # Key is available
 
     def init(self, force=False):
         """
-        Initializes storage by generating the master key file.
+        Initializes storage by generating the master key file (mode 0600).
         This command ALWAYS interacts with the key FILE, not the env var.
         """
         key_path = self.key_file
         env_key_set = os.environ.get(ENV_VAR_NAME)
 
-        if os.path.exists(key_path) and not force:
-            print(f"Key file '{key_path}' already exists.")
+        def already_exists():
+            _log(f"Key file '{key_path}' already exists.")
             if env_key_set:
-                print(f"Note: Environment variable {ENV_VAR_NAME} is set and will take precedence over this file for operations.")
-            print("Use --force to overwrite the file.")
+                _log(f"Note: Environment variable {ENV_VAR_NAME} is set and will take precedence over this file for operations.")
+            _log("Use --force to overwrite the file.")
             return f"Key file '{key_path}' already exists."
 
-        print(f"Generating new key file: '{key_path}'...")
-        # Using Fernet's key generation directly is simpler and sufficient
+        if os.path.lexists(key_path) and not force:
+            return already_exists()
+
+        _log(f"Generating new key file: '{key_path}'...")
         key = Fernet.generate_key() # This key is already base64 encoded bytes
 
         try:
-            with open(key_path, 'wb') as f:
-                f.write(key)
-            print(f"Successfully created key file: '{key_path}'")
-            if env_key_set:
-                print(f"Note: Environment variable {ENV_VAR_NAME} is set and will take precedence over this file for operations.")
-            return f"Key file '{key_path}' created."
-        except IOError as e:
-            print(f"ERROR: Could not write key file '{key_path}': {e}")
+            _write_key_file(key_path, key, overwrite=force)
+        except FileExistsError:
+            return already_exists()
+        except OSError as e:
+            _log(f"ERROR: Could not write key file '{key_path}': {e}")
             sys.exit(996)
+        _log(f"Successfully created key file: '{key_path}'")
+        _log("Keep it out of version control and container images (.gitignore / .dockerignore).")
+        if env_key_set:
+            _log(f"Note: Environment variable {ENV_VAR_NAME} is set and will take precedence over this file for operations.")
+        return f"Key file '{key_path}' created."
 
-    def encrypt(self, value):
-        """Encrypts a string value using the key and prints the !SEC tag."""
+    def encrypt(self, value=None):
+        """
+        Encrypts a secret and prints the !SEC tag to stdout.
+        Without VALUE the secret is read from stdin or a hidden prompt;
+        passing it as an argument leaks it to shell history and the process list.
+        """
         if not self._check_key_available():
             sys.exit(1) # Exit if no key
+        if value is None:
+            value = _read_secret_interactively()
+            if value is None:
+                sys.exit(1)
+        else:
+            _log("WARNING: Passing a secret as a command-line argument exposes it via shell history "
+                 "and the process list. Prefer stdin or the interactive prompt.")
+        if value == "":
+            _log("ERROR: Refusing to encrypt an empty value.")
+            sys.exit(1)
         encrypted_tag = encrypt_string_value(value, self.key_file)
         if encrypted_tag:
-             print("Add the following line to your YAML file:")
+             _log("Add the following line to your YAML file:")
              print(encrypted_tag)
         else:
              # Error message already printed by encrypt_string_value or _load_fernet_key
@@ -259,13 +345,14 @@ class Manager(object):
 
     def view(self, yaml_file):
         """Loads, decrypts (!SEC), resolves (!ENV) a YAML file and prints it."""
-        # _check_key_available is implicitly called by load_yaml_secrets -> keylocker_loader -> _load_fernet_key
-        # No need to call it explicitly here unless we want the error message earlier.
-        data = load_yaml_secrets(yaml_file, self.key_file)
+        try:
+            data = load_yaml_secrets(yaml_file, self.key_file)
+        except KeylockerError as e:
+            _log(f"ERROR: {e}")
+            sys.exit(1)
         if data is not None:
              # Dump back to YAML string for viewing (without custom tags, values resolved)
-             # Use standard SafeDumper for output
-             print(yaml.dump(data, Dumper=yaml.SafeDumper, default_flow_style=False, sort_keys=False, allow_unicode=True))
+             print(yaml.dump(data, Dumper=yaml.SafeDumper, default_flow_style=False, sort_keys=False, allow_unicode=True), end='')
         else:
             # Error messages were likely printed during loading
             sys.exit(1) # Exit with error code if loading failed

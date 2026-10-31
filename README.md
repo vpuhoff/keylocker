@@ -17,6 +17,8 @@ Keylocker uses a Fernet key for encryption and decryption. The key is obtained i
 
 Use the `keylocker init` command to generate a `storage.key` file if you prefer file-based key storage. Note that if `KEYLOCKER_SECRET_KEY` is set, it will always take precedence over the file for encryption/decryption operations.
 
+`keylocker init` creates `storage.key` readable by its owner only (mode `0600` on Linux/macOS). Never commit it or bake it into container images: add `storage.key` to both `.gitignore` and `.dockerignore`, and prefer `KEYLOCKER_SECRET_KEY` injected at runtime in CI and containers.
+
 ## Installation
 
 You can install the package using pip:
@@ -26,6 +28,12 @@ pip install keylocker
 ```
 
 The package is available on PyPI: [https://pypi.org/project/keylocker/](https://pypi.org/project/keylocker/)
+
+Runtime dependencies are declared in `pyproject.toml` and installed automatically
+by pip. `Pipfile` and both requirements files use the same supported ranges;
+`Pipfile.lock` records exact versions for reproducible development and CI.
+Tests check these declarations for drift, and CI smoke-tests the built wheel
+in a fresh virtualenv without Pipenv or an editable source install.
 
 ## Example YAML file (`config.yaml`):
 
@@ -55,16 +63,21 @@ deployment:
     ```
 
 2.  **Encrypt value for YAML:**
-    * Encrypts a string using the available key (Environment Variable or Key File) and prints the `!SEC` tag for you to copy into your YAML file.
+    * Encrypts a string using the available key (Environment Variable or Key File) and prints the `!SEC` tag to stdout for you to copy into your YAML file. Hints and diagnostics go to stderr.
+    * Without an argument the secret is read from stdin, or from a hidden prompt (entered twice) when run in a terminal. Avoid passing the secret as an argument: it ends up in shell history and is visible in the process list.
     ```bash
-    keylocker encrypt "my_secret_value"
-    # Output:
+    keylocker encrypt
+    # Secret to encrypt:
+    # Repeat secret:
     # Add the following line to your YAML file:
     # !SEC gAAAAABh...[encrypted data]...
+
+    # Non-interactive (one trailing newline is stripped):
+    printf '%s' "$DB_PASSWORD" | keylocker encrypt
     ```
 
 3.  **View decrypted YAML:**
-    * Loads the specified YAML file, resolves `!ENV` variables, decrypts `!SEC` values using the available key (Environment Variable or Key File), and prints the resulting YAML to standard output.
+    * Loads the specified YAML file, resolves `!ENV` variables, decrypts `!SEC` values using the available key (Environment Variable or Key File), and prints the resulting YAML to standard output. Only YAML is written to stdout, so it can be piped into `yq`. If any `!SEC` value cannot be decrypted, nothing is printed and the command exits with code 1.
     ```bash
     # Set environment variables if your YAML uses !ENV
     export API_KEY="your_actual_api_key"
@@ -88,7 +101,7 @@ deployment:
 
 ```python
 import os
-from keylocker import load_yaml_secrets
+from keylocker import load_yaml_secrets, DecryptionError
 
 # Set environment variables if your YAML uses !ENV
 os.environ['API_KEY'] = 'your_actual_api_key_for_python'
@@ -110,10 +123,14 @@ try:
         print(f"Database Password (from Python): {db_password}")
         print(f"API Key (from Python): {api_key}")
 
-except Exception as e:
-    print(f"An error occurred: {e}")
+except DecryptionError as e:
+    # Raised when a !SEC value cannot be decrypted (no key, wrong key, corrupted value).
+    # Never fall back to a placeholder value: fail closed.
+    raise SystemExit(f"Cannot load secrets: {e}")
 
 ```
+
+Writing YAML with `keylocker_dumper()` raises `EncryptionError` if a `SecureString` cannot be encrypted, so a secret is never written out in plaintext. Both exceptions inherit from `KeylockerError`.
 
 ## Usage in Bash:
 
