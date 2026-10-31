@@ -558,6 +558,51 @@ def test_init_force_failure_keeps_old_key_and_cleans_temp(generated_key_file, te
     assert open(generated_key_file, 'rb').read() == initial_content
     assert sorted(p.name for p in temp_dir.iterdir()) == [DEFAULT_KEY_FILE]
 
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError, KeyboardInterrupt])
+def test_force_partial_write_failure_cleans_temp_and_reraises(
+    generated_key_file, temp_dir, unset_env_key, monkeypatch, error_type
+):
+    """A failed partial write closes its fd, removes the temp and preserves the old key."""
+    initial_content = (temp_dir / DEFAULT_KEY_FILE).read_bytes()
+    failure = error_type("injected write failure")
+    opened_fds = []
+
+    def failing_write(fd, data):
+        opened_fds.append(fd)
+        os.write(fd, data[:10])
+        raise failure
+
+    monkeypatch.setattr(keylocker, '_write_all', failing_write)
+    with pytest.raises(error_type) as excinfo:
+        keylocker._write_key_file(generated_key_file, Fernet.generate_key(), overwrite=True)
+
+    assert excinfo.value is failure
+    assert (temp_dir / DEFAULT_KEY_FILE).read_bytes() == initial_content
+    assert sorted(p.name for p in temp_dir.iterdir()) == [DEFAULT_KEY_FILE]
+    assert len(opened_fds) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened_fds[0])
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError, KeyboardInterrupt])
+def test_force_replace_failure_with_missing_temp_reraises_original(
+    generated_key_file, temp_dir, unset_env_key, monkeypatch, error_type
+):
+    """An absent temp must not mask the original failure with a cleanup FileNotFoundError."""
+    initial_content = (temp_dir / DEFAULT_KEY_FILE).read_bytes()
+    failure = error_type("injected replace failure")
+
+    def failing_replace(src, dst):
+        os.unlink(src)
+        raise failure
+
+    monkeypatch.setattr(os, 'replace', failing_replace)
+    with pytest.raises(error_type) as excinfo:
+        keylocker._write_key_file(generated_key_file, Fernet.generate_key(), overwrite=True)
+
+    assert excinfo.value is failure
+    assert (temp_dir / DEFAULT_KEY_FILE).read_bytes() == initial_content
+    assert sorted(p.name for p in temp_dir.iterdir()) == [DEFAULT_KEY_FILE]
+
 def test_manager_init_write_error(temp_dir, unset_env_key):
     """Тест: init в несуществующую директорию -> sys.exit(996)."""
     bad_path = temp_dir / "no_such_dir" / "storage.key"
