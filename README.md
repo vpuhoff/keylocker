@@ -38,7 +38,20 @@ keylocker rotate config.yaml other.yaml      # re-encrypt every !SEC value with 
 # then delete the old key (every line after the first) from the key file
 ```
 
-`keylocker rotate` rewrites only the `!SEC` tokens in place: comments, formatting and values already encrypted with the primary key stay untouched, so running it twice changes nothing. If any value cannot be decrypted, the file is left unchanged and the command exits with code 1. With `KEYLOCKER_SECRET_KEY`, set it to `"new_key,old_key"`, run `keylocker rotate`, then drop the old key.
+`keylocker rotate` rewrites only the `!SEC` tokens in place: comments, formatting and values already encrypted with the primary key stay untouched, so running it twice changes nothing. If any value cannot be decrypted, the file is left unchanged and the command exits with code 1.
+
+`init --rotate` only touches the key file. When the key lives in `KEYLOCKER_SECRET_KEY` (typical for CI), build the new value yourself; the order matters, the new key goes **first**:
+
+```bash
+NEW_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+# 1. Store "new,old" in the CI secret (commas or newlines both work):
+export KEYLOCKER_SECRET_KEY="$NEW_KEY,$OLD_KEY"
+# 2. Re-encrypt and commit the configs:
+keylocker rotate config.yaml other.yaml
+# 3. Once every branch and deployment uses the rotated files, set the secret to "$NEW_KEY" alone.
+```
+
+Until step 3, both keys decrypt, so configs that are not rotated yet keep working.
 
 ## Installation
 
@@ -103,12 +116,12 @@ Global options (accepted before or after the command): `--key-file PATH` (alias 
 
 3.  **View decrypted YAML:**
     * Loads the specified YAML file, resolves `!ENV` variables, decrypts `!SEC` values using the available key (Environment Variable or Key File), and prints the resulting YAML to standard output. Only YAML is written to stdout, so it can be piped into `yq`. If any `!SEC` value cannot be decrypted, nothing is printed and the command exits with code 1.
-    * `--strict` also fails when a `!ENV` variable without a default is unset (otherwise it is shown as `null`).
+    * `--strict` also fails when a `!ENV` variable without a default is unset (otherwise it is shown as `null`). Use it everywhere: it will become the default in the next major release.
     ```bash
     # Set environment variables if your YAML uses !ENV
     export API_KEY="your_actual_api_key"
 
-    keylocker view config.yaml
+    keylocker view --strict config.yaml
     # Example output (values resolved/decrypted):
     # database:
     #   host: db.example.com
@@ -122,16 +135,22 @@ Global options (accepted before or after the command): `--key-file PATH` (alias 
     #   region: us-east-1
     #   ssh_key_pass: decrypted_pass
     ```
-    > **CI/CD caution:** `view` prints every secret in plaintext. Never run it bare in a CI job: its output ends up in build logs. Capture it into a variable or pipe it straight into the consumer (`keylocker view config.yaml | yq ...`), and register extracted values with your CI's secret masking (for example `echo "::add-mask::$DB_PASS"` on GitHub Actions).
+    > **CI/CD caution:** `view` prints every secret in plaintext. Never run it bare in a CI job: its output ends up in build logs. Capture it into a variable or pipe it straight into the consumer (`keylocker view --strict config.yaml | yq ...`), and register extracted values with your CI's secret masking (for example `echo "::add-mask::$DB_PASS"` on GitHub Actions).
 
 4.  **Edit secrets in your editor (like `ansible-vault edit`):**
     * Decrypts every `!SEC` value into a temporary copy, opens it in `$VISUAL` / `$EDITOR` (default: `notepad` on Windows, `vi` elsewhere) and encrypts the file back when the editor exits. Comments and layout are kept.
-    * In the editor secrets look like `password: !SEC "plaintext"`. Change them, or add new ones as `!SEC new value`: every `!SEC` value is encrypted on save. Unchanged secrets keep their exact ciphertext, so the git diff shows only what you edited.
+    * In the editor secrets look like `password: !SEC "plaintext"`. Change them, or add new ones as `!SEC new value`: every `!SEC` value is encrypted on save. Unchanged secrets keep their exact ciphertext, so the git diff shows only what you edited. A value changed to equal another secret gets its own fresh ciphertext, so identical tokens in the file do not reveal that two values are equal.
+    * A value without the `!SEC` tag is saved **in plaintext**. If the edited file has fewer `!SEC` values than before (for example, the tag was deleted by accident), `edit` warns and asks before saving; without a terminal it refuses.
     * The temporary copy is created with mode `0600` (in RAM-backed `/dev/shm` when available) and deleted afterwards. If the editor exits with an error, nothing is saved; if the result is not valid YAML, you are offered to re-open the editor.
     * GUI editors must wait until the file is closed, e.g. `EDITOR="code --wait"`.
     ```bash
     keylocker edit config.yaml
     ```
+    > **The editor can leave plaintext copies behind.** keylocker deletes its temporary file, but not what the editor writes on its own, and that usually lands on disk outside `/dev/shm`. On macOS and Windows there is no `/dev/shm`, so the temporary file itself goes to `$TMPDIR` / `%TEMP%` on disk. Configure the editor before editing secrets:
+    > * **Vim / Neovim:** disable the swap file, viminfo/shada, undo files and backups:
+    >   `EDITOR="vim -n -i NONE --cmd 'set noundofile nobackup nowritebackup'"` (the same flags work for `nvim`).
+    > * **VS Code:** Local History keeps copies of saved files; exclude keylocker's temporary files with `"workbench.localHistory.exclude": {"**/keylocker-*": true}` or set `"workbench.localHistory.enabled": false`. Hot exit (`"files.hotExit"`) backs up unsaved changes, so save and close the tab before quitting, or turn it `"off"`.
+    > * **Other editors:** turn off autosave/backup/recovery files for the temporary file, or point `TMPDIR` to a RAM disk.
 
 5.  **Re-encrypt with the primary key (rotation):**
     ```bash
@@ -179,7 +198,7 @@ All errors inherit from `KeylockerError`:
 | `MissingEnvVarError` | a `!ENV` variable without a default is unset (`strict=True`) |
 | `EncryptionError` | a `SecureString` cannot be encrypted, so it is never written out in plaintext |
 
-For backward compatibility `strict` defaults to `False`: a missing or invalid file then returns `None` (with a `FutureWarning`) and an unset `!ENV` variable resolves to `None`. `strict=True` will become the default in the next major release.
+For backward compatibility `strict` defaults to `False`: a missing or invalid file then returns `None` (with a `FutureWarning`) and an unset `!ENV` variable resolves to `None`. `strict=True` will become the default in the next major release; pass it explicitly now (and use `keylocker view --strict`), so the switch changes nothing for you.
 
 ### Editing YAML from code without noisy diffs
 
@@ -228,7 +247,7 @@ export API_KEY="your_bash_api_key"
 # export KEYLOCKER_SECRET_KEY='your_base64_encoded_fernet_key'
 
 # Get the decrypted YAML content
-CONFIG_YAML=$(keylocker view config.yaml)
+CONFIG_YAML=$(keylocker view --strict config.yaml)
 
 # Check if the command executed successfully
 if [ $? -ne 0 ]; then
