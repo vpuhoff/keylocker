@@ -24,7 +24,7 @@ def declared_requirements():
 
 
 def test_package_declares_all_direct_runtime_dependencies():
-    assert set(declared_requirements()) == {"cryptography", "fire", "pyyaml"}
+    assert set(declared_requirements()) == {"cryptography", "pyyaml"}
 
 
 @pytest.mark.parametrize("path", ["requirements.txt", "keylocker/requirements.txt"])
@@ -59,7 +59,6 @@ def test_lock_contains_compatible_runtime_versions():
     "name,minimum,obsolete,next_breaking",
     [
         ("cryptography", "50.0.2", "44.0.1", "51.0.0"),
-        ("fire", "0.7.1", "0.1.3", "0.8.0"),
         ("pyyaml", "6.0.3", "5.0", "7.0"),
     ],
 )
