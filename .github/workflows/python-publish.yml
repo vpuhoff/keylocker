@@ -115,7 +115,7 @@ jobs:
         assert Path(sys.prefix) in Path(keylocker.__file__).resolve().parents
         requirements = metadata.requires("keylocker") or []
         assert {re.match(r"[\w.-]+", req).group().lower() for req in requirements} == {
-            "cryptography", "fire", "pyyaml"
+            "cryptography", "pyyaml"
         }
         env = {k: v for k, v in os.environ.items() if k != "KEYLOCKER_SECRET_KEY"}
         with tempfile.TemporaryDirectory() as directory:
