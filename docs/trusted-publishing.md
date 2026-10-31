@@ -75,9 +75,10 @@ not certify that the code is safe
 
 1. Register the exact PyPI publisher above, then merge the workflow into the
    release branch (`master`) before creating a release tag.
-2. Choose a new, unpublished version, update `pyproject.toml`, and use a matching
-   tag, for example version `0.4.9` and tag `v0.4.9`. This checklist does not
-   authorize creating that release; do not move `v0.4.8` or retry its upload.
+2. Choose a new, unpublished version and tag the intended release commit, for
+   example `v0.4.9`. Do not edit a version field: the build backend derives the
+   package version from Git tags. This checklist does not authorize creating a
+   release; do not move old release tags or retry their uploads.
 3. Wait for the six test jobs, artifact build, and `Deploy to PyPI` to succeed.
    If environment approval is configured, approve the intended release run.
 4. Open the new release's Security/Provenance view on PyPI and check that every
@@ -92,6 +93,22 @@ not certify that the code is safe
 The existing 0.4.8 files were uploaded without attestations. This workflow change
 does not add provenance retroactively to those files; validate provenance on the
 next release.
+
+## Version from Git tags
+
+`pyproject.toml` declares a dynamic version using the
+[Poetry dynamic-versioning backend](https://github.com/mtkennerly/poetry-dynamic-versioning).
+The `tool.poetry.version = "0.0.0"` value is only a build-time placeholder;
+release versions come from tags such as `v0.4.9`. Untagged commits receive
+PEP 440 development/post-release versions instead of reusing a release version
+([backend documentation](https://github.com/mtkennerly/poetry-dynamic-versioning)).
+
+CI fetches full Git history and tags. The normal `python -m build` flow creates
+an sdist and builds the wheel from that sdist; the packaged source must preserve
+its resolved version even when built without the original Git repository.
+`scripts/verify_distribution.py` checks the metadata of both files and, on tag
+pushes, rejects a version that does not equal the tag without its `v` prefix.
+No version-bump commit is required for future releases.
 
 ## Validation limits and failure handling
 

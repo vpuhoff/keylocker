@@ -1,6 +1,6 @@
 [project]
 name = "keylocker"
-version = "0.4.8" # Убедитесь, что версия актуальна
+dynamic = ["version"]
 description = "Library with the CLI to save the encrypted secrets in the configuration file, but a transparent read and write the new settings in the app."
 readme = "README.md"
 license = { text = "MIT" } 
@@ -20,9 +20,20 @@ classifiers = [
 dependencies = [] 
 
 # Стандартная секция для определения скриптов/точек входа
+
 [project.scripts]
 keylocker = "keylocker:main"
 
+[tool.poetry]
+# Build-time placeholder, not a release version. The Git tag is authoritative.
+version = "0.0.0"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+style = "pep440"
+strict = true
+
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=2.0.0,<3.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"
