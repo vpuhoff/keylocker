@@ -57,7 +57,15 @@ jobs:
       run: pipenv sync --dev # Устанавливаем версии из Pipfile.lock без перегенерации
 
     - name: Run tests (pytest via Pipenv)
-      run: pipenv run pytest tests/ # Запускаем тесты через pipenv run
+      run: pipenv run pytest --cov --cov-branch --cov-report=xml tests/
+
+    - name: Upload coverage reports to Codecov
+      if: matrix.python-version == '3.10'
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        disable_search: true
 
     # Сборка пакета (sdist и wheel) стандартным способом
     - name: Install build tools
