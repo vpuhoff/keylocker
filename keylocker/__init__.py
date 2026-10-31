@@ -332,8 +332,7 @@ def _scalar_paths(documents):
                 walk(item, path + (index,))
 
     for index, document in enumerate(documents):
-        if document is not None:
-            walk(document, (index,))
+        walk(document, (index,))
     return paths
 
 def _sec_scalars(text, file_path):

@@ -391,6 +391,16 @@ def test_sec_scalars_paths(key):
     assert paths == [(1, 'base', 'k'), (1, 'list', 1), (1, None), None]
 
 
+def test_sec_mapping_key_reuses_token_by_value(key):
+    """A !SEC key has no path, so its token is matched by value alone."""
+    fernet = MultiFernet([Fernet(key)])
+    key_token, value_token = _token(key, 'k'), _token(key, 'v')
+    source = f"!SEC {key_token}: !SEC {value_token}\n"
+    text, known = keylocker._decrypt_for_edit(source, fernet)
+    assert text == '!SEC "k": !SEC "v"\n'
+    assert keylocker._encrypt_after_edit(text, fernet, known) == source
+
+
 def test_encrypt_after_edit_failure_hides_plaintext():
     class Broken:
         def encrypt(self, data):
