@@ -3,6 +3,7 @@
 import os
 import sys
 import getpass
+import tempfile
 import yaml
 import fire
 from cryptography.fernet import Fernet, InvalidToken
@@ -114,20 +115,22 @@ def keylocker_loader(key_file=DEFAULT_KEY_FILE):
 
     def sec_constructor(loader, node):
         value = loader.construct_scalar(node)
+        # str(node.start_mark) embeds a snippet of the source YAML, which may hold other secrets.
+        position = f"line {node.start_mark.line + 1}, column {node.start_mark.column + 1}"
         if fernet is None:
             raise DecryptionError(
-                f"Cannot decrypt !SEC value at {node.start_mark}: no valid key is loaded."
+                f"Cannot decrypt !SEC value at {position}: no valid key is loaded."
             )
         try:
             return fernet.decrypt(value.encode()).decode()
         except InvalidToken:
             raise DecryptionError(
-                f"Failed to decrypt !SEC value at {node.start_mark}: invalid token or key mismatch."
+                f"Failed to decrypt !SEC value at {position}: invalid token or key mismatch."
             ) from None
         except Exception as e:
             raise DecryptionError(
-                f"Unexpected error during !SEC decryption at {node.start_mark}: {type(e).__name__}"
-            ) from e
+                f"Unexpected error during !SEC decryption at {position}: {type(e).__name__}"
+            ) from None
 
     def env_constructor(loader, node):
         var_name = loader.construct_scalar(node)
@@ -209,16 +212,43 @@ def encrypt_string_value(value_to_encrypt, key_file=DEFAULT_KEY_FILE):
          _log(f"ERROR: An unexpected error occurred during encryption: {type(e).__name__}")
          return None
 
-def _write_key_file(key_path, key):
-    """Writes the key so that only the owner can read it (0600 on POSIX)."""
-    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_BINARY', 0), KEY_FILE_MODE)
-    try:
-        # O_CREAT's mode is ignored for an existing file (init --force), so tighten it explicitly.
-        if hasattr(os, 'fchmod'):
-            os.fchmod(fd, KEY_FILE_MODE)
-        os.write(fd, key)
-    finally:
+def _write_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+    os.fsync(fd)
+
+def _write_key_file(key_path, key, overwrite=False):
+    """
+    Writes the key readable by the owner only (0600 on POSIX), never following symlinks.
+    Without overwrite, raises FileExistsError if anything (even a dangling symlink) is at key_path.
+    With overwrite, the key is written to a private temp file and atomically renamed over
+    key_path, which replaces a symlink itself rather than writing through it.
+    """
+    if not overwrite:
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
+        fd = os.open(key_path, flags, KEY_FILE_MODE)
+        try:
+            _write_all(fd, key)
+        except BaseException:
+            os.close(fd)
+            os.unlink(key_path)
+            raise
         os.close(fd)
+        return
+
+    directory = os.path.dirname(os.path.abspath(key_path))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.keylocker-', suffix='.tmp')
+    try:
+        try:
+            _write_all(fd, key)
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, key_path)
+    except BaseException:
+        if os.path.lexists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 def _read_secret_interactively():
     """Reads a secret from piped stdin or from a hidden, confirmed prompt."""
@@ -261,18 +291,23 @@ class Manager(object):
         key_path = self.key_file
         env_key_set = os.environ.get(ENV_VAR_NAME)
 
-        if os.path.exists(key_path) and not force:
+        def already_exists():
             _log(f"Key file '{key_path}' already exists.")
             if env_key_set:
                 _log(f"Note: Environment variable {ENV_VAR_NAME} is set and will take precedence over this file for operations.")
             _log("Use --force to overwrite the file.")
             return f"Key file '{key_path}' already exists."
 
+        if os.path.lexists(key_path) and not force:
+            return already_exists()
+
         _log(f"Generating new key file: '{key_path}'...")
         key = Fernet.generate_key() # This key is already base64 encoded bytes
 
         try:
-            _write_key_file(key_path, key)
+            _write_key_file(key_path, key, overwrite=force)
+        except FileExistsError:
+            return already_exists()
         except OSError as e:
             _log(f"ERROR: Could not write key file '{key_path}': {e}")
             sys.exit(996)

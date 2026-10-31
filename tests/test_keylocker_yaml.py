@@ -494,6 +494,70 @@ def test_init_force_tightens_permissions(key_file_in_temp_dir, unset_env_key):
     Manager(key_file=str(key_file_in_temp_dir)).init(force=True)
     assert (key_file_in_temp_dir.stat().st_mode & 0o777) == 0o600
 
+@pytest.mark.parametrize("use_key", [True, False])
+def test_decryption_error_does_not_leak_yaml_source(generated_key_file, unset_env_key, use_key):
+    """Тест: DecryptionError не содержит фрагмент исходного YAML с соседними секретами."""
+    key_file = generated_key_file if use_key else "nonexistent.key"
+    with pytest.raises(DecryptionError) as excinfo:
+        yaml.load("{key: S3CR3T, bad: !SEC invalid}", Loader=keylocker_loader(key_file))
+    assert "S3CR3T" not in str(excinfo.value)
+    assert "line 1, column 20" in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+
+@pytest.mark.skipif(os.name == 'nt', reason="POSIX symlinks")
+def test_init_refuses_dangling_symlink(temp_dir, unset_env_key):
+    """Тест: init без --force не создаёт ключ по цели висячего симлинка."""
+    target = temp_dir / "elsewhere.key"
+    link = temp_dir / DEFAULT_KEY_FILE
+    os.symlink(target, link)
+    result = Manager(key_file=str(link)).init()
+    assert "already exists" in result
+    assert not target.exists()
+    assert os.path.islink(link)
+
+@pytest.mark.skipif(os.name == 'nt', reason="POSIX symlinks")
+def test_init_force_replaces_symlink_without_writing_target(temp_dir, unset_env_key):
+    """Тест: init --force заменяет сам симлинк, не трогая файл, на который он указывает."""
+    target = temp_dir / "victim.txt"
+    target.write_bytes(b"do not touch")
+    link = temp_dir / DEFAULT_KEY_FILE
+    os.symlink(target, link)
+    Manager(key_file=str(link)).init(force=True)
+    assert target.read_bytes() == b"do not touch"
+    assert not os.path.islink(link)
+    Fernet(link.read_bytes())
+    assert (link.stat().st_mode & 0o777) == 0o600
+
+def test_init_race_does_not_overwrite(generated_key_file, unset_env_key, monkeypatch):
+    """Тест: файл, появившийся после проверки, не перезаписывается без --force."""
+    initial_content = open(generated_key_file, 'rb').read()
+    monkeypatch.setattr(os.path, 'lexists', lambda p: False)
+    result = Manager(key_file=generated_key_file).init()
+    assert "already exists" in result
+    assert open(generated_key_file, 'rb').read() == initial_content
+
+def test_init_write_failure_removes_partial_file(key_file_in_temp_dir, unset_env_key, monkeypatch):
+    """Тест: сбой записи без --force не оставляет частичный файл ключа."""
+    def failing_write(fd, data):
+        raise OSError("disk full")
+    monkeypatch.setattr(keylocker, '_write_all', failing_write)
+    with pytest.raises(SystemExit) as excinfo:
+        Manager(key_file=str(key_file_in_temp_dir)).init()
+    assert excinfo.value.code == 996
+    assert not key_file_in_temp_dir.exists()
+
+def test_init_force_failure_keeps_old_key_and_cleans_temp(generated_key_file, temp_dir, unset_env_key, monkeypatch):
+    """Тест: сбой --force сохраняет старый ключ и удаляет временный файл."""
+    initial_content = open(generated_key_file, 'rb').read()
+    def failing_replace(src, dst):
+        raise OSError("rename failed")
+    monkeypatch.setattr(os, 'replace', failing_replace)
+    with pytest.raises(SystemExit) as excinfo:
+        Manager(key_file=generated_key_file).init(force=True)
+    assert excinfo.value.code == 996
+    assert open(generated_key_file, 'rb').read() == initial_content
+    assert sorted(p.name for p in temp_dir.iterdir()) == [DEFAULT_KEY_FILE]
+
 def test_manager_init_write_error(temp_dir, unset_env_key):
     """Тест: init в несуществующую директорию -> sys.exit(996)."""
     bad_path = temp_dir / "no_such_dir" / "storage.key"
